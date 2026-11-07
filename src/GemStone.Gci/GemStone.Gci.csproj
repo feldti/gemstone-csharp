@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Required by [LibraryImport] and the fixed buffers in GciErrSType. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>GemStone.Gci</RootNamespace>
+    <!-- Linux and Windows clients; GemStone/S 64 Bit ships 64-bit client libraries only. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="GemStone.Gci.Tests" />
+  </ItemGroup>
+
+</Project>

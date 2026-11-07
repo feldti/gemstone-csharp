@@ -1,0 +1,22 @@
+# Build output
+bin/
+obj/
+artifacts/
+TestResults/
+*.binlog
+
+# IDEs
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Local only: conversion of the GemTalk manual "GemBuilder for C" (copyright GemTalk Systems)
+gemstone-c/
+
+# GemStone client libraries copied for publishing
+*.so
+*.so.*
+*.dll
+*.dylib

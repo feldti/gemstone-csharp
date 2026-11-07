@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Standalone sample. Build on its own:
+      dotnet build samples/GsRepl
+    Publish a single self-contained executable (no .NET install needed on the target):
+      dotnet publish samples/GsRepl -r linux-x64
+      dotnet publish samples/GsRepl -r win-x64
+    The GemStone client libraries are NOT bundled; set GEMSTONE on the target machine or
+    copy libgcirpc-*.so / libgcirpc-*.dll (and their dependencies) next to the executable.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>gsrepl</AssemblyName>
+    <RootNamespace>GsRepl</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- GemStone/S 64 Bit client libraries exist for x64 only. -->
+    <RuntimeIdentifiers>linux-x64;win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Safe: GemStone.Gci uses source-generated [LibraryImport], no reflection. -->
+    <PublishTrimmed>true</PublishTrimmed>
+  </PropertyGroup>
+
+  <!--
+    Optional: bundle the GemStone client libraries so the app runs without GEMSTONE.
+      dotnet publish samples/GsRepl -r linux-x64 -p:GemStoneLibDir=$GEMSTONE/lib
+      dotnet publish samples/GsRepl -r win-x64   -p:GemStoneLibDir=C:\GemStone\GemStone64BitClient3.7.5-x86.Windows_NT\bin
+    Linux: libgcirpc loads libssl and libkrb5 at runtime (verified with 3.7.5).
+    Windows: all DLLs of the client directory are copied (dependency set not verified).
+    The files stay next to the executable (ExcludeFromSingleFile) so the OS loader finds them.
+  -->
+  <PropertyGroup>
+    <_GsTargetsWindows Condition="$(RuntimeIdentifier.StartsWith('win')) Or ('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows')))">true</_GsTargetsWindows>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(GemStoneLibDir)' != '' And '$(_GsTargetsWindows)' == 'true'">
+    <GemStoneClientLib Include="$(GemStoneLibDir)/*.dll" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(GemStoneLibDir)' != '' And '$(_GsTargetsWindows)' != 'true'">
+    <GemStoneClientLib Include="$(GemStoneLibDir)/libgcirpc-*.so;$(GemStoneLibDir)/libssl-*.so;$(GemStoneLibDir)/libkrb5-*.so" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="@(GemStoneClientLib)"
+          Link="%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\GemStone.Gci\GemStone.Gci.csproj" />
+  </ItemGroup>
+
+</Project>

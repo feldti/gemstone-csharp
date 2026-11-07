@@ -1,0 +1,11 @@
+<Project>
+  <!-- Shared settings for the library, tests and all samples. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Embed symbols so published single-file apps don't ship loose .pdb files. -->
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+</Project>
