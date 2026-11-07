@@ -30,11 +30,13 @@ public sealed class GsInstVarAttribute(string name) : Attribute
 [AttributeUsage(AttributeTargets.Property, Inherited = true)]
 public sealed class GsIgnoreAttribute : Attribute;
 
-/// <summary>Loaded, but never written back (read-only loaders ignore it).</summary>
+/// <summary>Loaded, but never written back by <see cref="GsObjectContext.SaveChanges"/>.</summary>
 [AttributeUsage(AttributeTargets.Property, Inherited = true)]
 public sealed class GsReadOnlyAttribute : Attribute;
 
-/// <summary>Receives the OOP of the loaded object; the property type must be <see cref="Oop"/>.</summary>
+/// <summary>
+/// Receives the OOP of the loaded (or newly saved) object; the property type must be <see cref="Oop"/>.
+/// </summary>
 [AttributeUsage(AttributeTargets.Property, Inherited = true)]
 public sealed class GsOopAttribute : Attribute;
 
@@ -85,4 +87,12 @@ public interface IGsValueConverter
     /// (also for Symbols), <c>byte[]</c>, date/time values, or the <see cref="Oop"/> for anything else.
     /// </summary>
     object? FromGemStone(object? value, Type targetType);
+
+    /// <summary>
+    /// Converts a property value back for <see cref="GsObjectContext.SaveChanges"/>: return a .NET
+    /// value that <see cref="GciSession.FromValue"/> understands (or an <see cref="Oop"/>).
+    /// Read-only converters can leave the default; saving a changed value then throws.
+    /// </summary>
+    object? ToGemStone(object? value, Type propertyType) =>
+        throw new NotSupportedException($"{GetType().Name} cannot convert values back to GemStone.");
 }

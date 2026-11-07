@@ -72,7 +72,7 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
 - `GciClampedTravArgsSType` laut Header: `clampSpec, resultOop, travBuff, level, retrievalFlags, isRpc`. Das Handbuch nennt eine andere Reihenfolge und lässt `resultOop` weg. `isRpc` muss 1 sein (C++-Konstruktor).
 - **GemStone-Bug 3.7.5: `GciFetchPaths` bringt die Gem zum Absturz** (SIGSEGV in `checkFetchPathOffset` → `om::FetchSize_c(obj=0x14)`), wenn ein Pfadschritt *von* einem Spezialobjekt (nil, SmallInteger …) ausgeht; die Session ist dann weg. `FetchPaths` geht deshalb Schritt für Schritt vor (ein Roundtrip pro Pfadtiefe) und prüft vor jedem Schritt lokal `IsSpecial`. `GciFetchPaths` nie direkt mit mehrstufigen Pfaden aufrufen. Ungültige Indizes oder Byte-Objekte sind dagegen sicher (liefern `OOP_ILLEGAL`). In 3.7.6 unverändert vorhanden (verifiziert: gleicher Stacktrace, gemdo.c:1159).
 - **GemStone-Leck 3.7.5: `GciExecuteStrTrav`** lässt den Quelltext-String im PureExportSet, und seinen OOP bekommt man nicht. In 3.7.6 behoben (Probe: 50 Aufrufe → +50 in 3.7.5, +0 in 3.7.6). `ExecuteTraverse` nutzt trotzdem `Execute` + `Traverse`, damit es mit 3.7.5 dicht bleibt. `GciPerformTrav` exportiert nur das Ergebnis; das wird ohne `KeepResult` wieder freigegeben.
-- **Objekt-Mapping** (`src/GemStone.Gci/Mapping/`, vorerst nur lesend): C#-Klassen mit `[GsClass("Name")]`/`[GsInstVar("ivName")]` (die Namen dürfen abweichen, die Klassen kommen vom Code-Generator des Nutzers), dazu `[GsCollection]`, `[GsConverter]`, `[GsOop]`, `[GsIgnore]`, `[GsReadOnly]`. `GsObjectContext.Load<T>`:
+- **Objekt-Mapping** (`src/GemStone.Gci/Mapping/`, Laden in `GsObjectContext.cs`, Schreiben in `GsObjectContext.Save.cs`): C#-Klassen mit `[GsClass("Name")]`/`[GsInstVar("ivName")]` (die Namen dürfen abweichen, die Klassen kommen vom Code-Generator des Nutzers), dazu `[GsCollection]`, `[GsConverter]`, `[GsOop]`, `[GsIgnore]`, `[GsReadOnly]`. `GsObjectContext.Load<T>`:
   - Ablauf: eine Traversal ab der Wurzel. Was das Mapping darüber hinaus braucht, wird gesammelt in weiteren Runden nachgeladen; `Depth` ist also nur eine Performance-Einstellung.
   - Dann werden die Objekte gebaut, iterativ und ohne Rekursion über den Objektgraphen. Eine Identity-Map sorgt dafür, dass Zyklen und geteilte Referenzen dieselbe C#-Instanz ergeben.
   - Polymorphie: Für eine GemStone-Unterklasse wird die passende C#-Unterklasse mit eigenem `[GsClass]` gewählt (aus derselben Assembly), sonst die erwartete Klasse.
@@ -80,7 +80,16 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
   - Lesen der Collections: `Array`, `OrderedCollection` und `SortedCollection` haben keine `firstIndex`/`lastIndex`-Instanzvariablen, `IdentitySet`/`IdentityBag` sind NSCs. Beide werden direkt aus den Reports gelesen. `Set`/`Bag` halten ihre Elemente in einem internen `dict`, Dictionaries sind gehasht: Diese werden serverseitig flachgeklopft (`asArray` bzw. Schlüssel/Wert-Paare), ein Roundtrip pro Runde für alle zusammen.
   - Werte, die offline nicht lesbar sind (LargeInteger, ScaledDecimal-Objekte, DateAndTime-Objekte …), kosten je einen Roundtrip über `GciSession.ToValue`.
   - Geerbte Properties müssen vom deklarierenden Typ geholt werden, sonst fehlt bei `private set` der Setter.
-  - Reflection-basiert, daher `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]`; ein Source-Generator ist geplant. Die Tests (`GsMappingIntegrationTests`) legen Klassen und Daten in einer eigenen Session an und committen nie.
+  - `SaveChanges`: Beim Laden (`TrackChanges`, Standard an) legt der Kontext pro Objekt und Property einen Snapshot an (OOP, Wert, bei Collections die Elemente). Die geladenen OOPs hält er per `GciSaveObjs` (`GciSession.Retain`) im Export-Set, bis `Dispose`/`Clear` sie freigibt. Ohne das könnte die Gem temporäre Objekte zwischen Laden und Speichern einsammeln. Eine Wurzel, die der Aufrufer per `Load(Oop)` übergibt, hält dagegen der Aufrufer.
+    - Geschrieben wird nur, was vom Snapshot abweicht: Entities werden nach Referenz verglichen, alles andere nach Wert.
+    - Neue Objekte entstehen per `new` auf der GemStone-Klasse.
+    - Eine geänderte Collection wird als Ganzes in place neu befüllt (ein Block, dazu die Elemente als Array).
+    - Strings und Enums, die Symbols waren, bleiben Symbols. Enums werden als Symbol mit kleinem Anfangsbuchstaben geschrieben (`#frozen`).
+    - Ein Commit gehört nicht dazu.
+  - `Stores` zählt auch die Instanzvariablen neu angelegter Objekte mit.
+  - `Cast<DictionaryEntry>()` auf einem `IDictionary` liefert `KeyValuePair` (generischer Enumerator). Deshalb `IDictionary.GetEnumerator()` verwenden.
+  - Die Session hält `Date`/`DateAndTime`/`Time` nach dem ersten Auflösen im Export-Set. Tests, die die Größe des Export-Sets messen, müssen alle beteiligten Pfade vorher einmal durchlaufen.
+  - Reflection-basiert, daher `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]`; ein Source-Generator ist geplant. Die Tests (`GsMappingIntegrationTests`, `GsSaveChangesIntegrationTests`) legen Klassen und Daten in einer eigenen Session an und committen nie.
 - Integrationstests laufen in der xUnit-Collection `"Stone"` ohne Parallelisierung, weil es nur eine GCI-Session pro Prozess gibt.
 - `OopType` ist in GemStone/S 64 Bit **64 Bit** (`ulong`). Das Handbuch (Kap. 6.3) schreibt fälschlich „32-bit“.
 

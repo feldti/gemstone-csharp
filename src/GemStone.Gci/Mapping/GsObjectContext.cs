@@ -19,6 +19,13 @@ public sealed record GsLoadOptions
 
     /// <summary>Traversal buffer size, see <see cref="GciTraversalOptions.BufferSize"/>.</summary>
     public int BufferSize { get; init; } = 256 * 1024;
+
+    /// <summary>
+    /// Remember the loaded state for <see cref="GsObjectContext.SaveChanges"/> and keep the loaded
+    /// objects in the export set until the context is disposed (one extra round trip per load).
+    /// Turn off for pure reading.
+    /// </summary>
+    public bool TrackChanges { get; init; } = true;
 }
 
 /// <summary>Mapping errors: either the mapping does not fit the image, or a value does not fit its property.</summary>
@@ -35,7 +42,7 @@ public sealed class GsMappingException(string message, IReadOnlyList<string> pro
 
 /// <summary>
 /// Loads GemStone object graphs into C# objects mapped with <see cref="GsClassAttribute"/> and
-/// <see cref="GsInstVarAttribute"/> (read-only).
+/// <see cref="GsInstVarAttribute"/>, tracks changes and writes them back with <see cref="SaveChanges"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -46,8 +53,9 @@ public sealed class GsMappingException(string message, IReadOnlyList<string> pro
 /// <para>
 /// The context keeps an identity map: within a context every GemStone object becomes exactly one
 /// C# object (shared references and cycles are preserved); loading it again refreshes that
-/// instance. Mapping metadata is validated against the image on first use of a type.
-/// Not thread-safe.
+/// instance (and discards unsaved local changes). Mapping metadata is validated against the image
+/// on first use of a type. Tracked objects are kept in the export set until <see cref="Dispose"/>
+/// or <see cref="Clear"/>. Not thread-safe.
 /// </para>
 /// </remarks>
 [RequiresUnreferencedCode("The object mapper inspects mapped types by reflection.")]
@@ -78,7 +86,7 @@ public sealed partial class GsObjectContext
         options ??= new GsLoadOptions();
         ArgumentOutOfRangeException.ThrowIfLessThan(options.Depth, 1, nameof(options));
         var shape = Prepare(typeof(T));
-        var load = new LoadRun(this, options);
+        var load = new LoadRun(this, options, callerOwnsRoot: !_ownRoot);
         load.Discover(root, shape);
         var result = load.Build(root, shape, "root");
         return result is null && default(T) is not null
@@ -91,25 +99,31 @@ public sealed partial class GsObjectContext
     {
         ArgumentNullException.ThrowIfNull(source);
         var root = _session.Execute(source);
+        var keep = false;
         try
         {
-            return Load<T>(root, options);
+            _ownRoot = true;
+            var result = Load<T>(root, options);
+            keep = _retained.Contains(root); // tracked: the context owns the result now
+            return result;
         }
         finally
         {
-            _session.Release(root);
+            _ownRoot = false;
+            if (!keep) _session.Release(root);
         }
     }
+
+    private bool _ownRoot;
 
     /// <summary>OOP of an object loaded by this context.</summary>
     public bool TryGetOop(object entity, out Oop oop) => _oops.TryGetValue(entity, out oop);
 
-    /// <summary>Forgets all loaded objects (the identity map); mapping metadata stays cached.</summary>
-    public void Clear()
-    {
-        _identity.Clear();
-        _oops.Clear();
-    }
+    /// <summary>
+    /// Forgets all loaded objects (identity map and tracked state) and releases their OOPs;
+    /// mapping metadata stays cached. Use after an abort before reloading.
+    /// </summary>
+    public void Clear() => Dispose();
 
     /// <summary>
     /// Validates the mapping for <paramref name="type"/> and everything reachable from it against
@@ -310,8 +324,10 @@ public sealed partial class GsObjectContext
 
     [RequiresUnreferencedCode("The object mapper inspects mapped types by reflection.")]
     [RequiresDynamicCode("The object mapper creates generic collection types at runtime.")]
-    private sealed class LoadRun(GsObjectContext ctx, GsLoadOptions options)
+    private sealed class LoadRun(GsObjectContext ctx, GsLoadOptions options, bool callerOwnsRoot)
     {
+        private Oop _root = Oop.Illegal;
+        private readonly List<Oop> _toRetain = [];
         private readonly GciSession _session = ctx._session;
         private readonly Dictionary<Oop, GciObjectReport> _reports = [];
         private readonly Dictionary<Oop, Oop[]> _flattened = [];
@@ -461,9 +477,13 @@ public sealed partial class GsObjectContext
 
         public object? Build(Oop root, GsShape shape, string where)
         {
+            _root = root;
             var result = Value(root, shape, where, null);
             while (_fill.TryDequeue(out var job))
                 Fill(job.Instance, job.Oop, job.Map);
+            if (options.TrackChanges)
+                // Root passed in by the caller: the caller keeps it alive (and may release it).
+                ctx.RetainAll(_toRetain.Where(o => !(callerOwnsRoot && o == _root)));
             return result;
         }
 
@@ -471,14 +491,42 @@ public sealed partial class GsObjectContext
         {
             var report = _reports[oop];
             map.OopProperty?.SetValue(instance, oop);
+            EntityEntry? entry = null;
+            if (options.TrackChanges)
+            {
+                entry = new EntityEntry(instance, oop, map);
+                ctx._entries[instance] = entry; // reload: replaces the old snapshot
+                _toRetain.Add(oop);
+            }
             foreach (var p in map.Properties)
             {
-                var value = Value(NamedValue(report, p, p.Path), p.Shape, p.Path, p);
+                var ivOop = NamedValue(report, p, p.Path);
+                object? value;
+                CollectionSnapshot? coll = null;
+                if (entry is not null && p.Converter is null && p.Shape.IsCollection && !ivOop.IsSpecial)
+                {
+                    var elements = new List<SnapElement>();
+                    value = Collection(ivOop, p.Shape, p.Path, p.CollectionKind, elements);
+                    coll = new CollectionSnapshot(ivOop, elements);
+                    _toRetain.Add(ivOop);
+                }
+                else
+                    value = Value(ivOop, p.Shape, p.Path, p);
                 if (value is null && p.Property.PropertyType.IsValueType && Nullable.GetUnderlyingType(p.Property.PropertyType) is null)
                     throw GsMappingException.For($"{p.Path}: nil cannot be assigned to {p.Property.PropertyType.Name} ({oop}).");
                 p.Property.SetValue(instance, value);
+                if (entry is not null)
+                    entry.Properties[p] = new PropertySnapshot
+                    {
+                        Oop = ivOop, Value = value, Collection = coll, IsSymbol = IsSymbol(ivOop),
+                        LowerFirst = GciTraversal.Decode(ivOop, _reports) is not string { Length: > 0 } text || char.IsLower(text[0]),
+                    };
             }
         }
+
+        private bool IsSymbol(Oop oop) =>
+            _reports.TryGetValue(oop, out var r) && (r.Class == KnownClasses.Symbol
+                || r.Class == KnownClasses.DoubleByteSymbol || r.Class == KnownClasses.QuadByteSymbol);
 
         private object? Value(Oop oop, GsShape shape, string where, GsPropertyMap? property)
         {
@@ -523,9 +571,15 @@ public sealed partial class GsObjectContext
 
         private readonly HashSet<Oop> _filled = [];
 
-        private object Collection(Oop oop, GsShape shape, string where, GsCollectionKind? declared)
+        private object Collection(Oop oop, GsShape shape, string where, GsCollectionKind? declared, List<SnapElement>? snapshot = null)
         {
             var elements = Elements(oop, _reports[oop], shape, where, declared)!;
+            object? Element(Oop e, GsShape s, string w)
+            {
+                var v = this.Element(e, s, w);
+                snapshot?.Add(new SnapElement(e, v, IsSymbol(e)));
+                return v;
+            }
             switch (shape.Kind)
             {
                 case GsShapeKind.Array:

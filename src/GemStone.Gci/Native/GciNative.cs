@@ -92,6 +92,10 @@ internal static partial class GciNative
     [LibraryImport(LibraryName)]
     public static unsafe partial void GciReleaseOops(ulong* theOops, int numOops);
 
+    /// <summary>void GciSaveObjs(const OopType theOops[], int numOops); — add to the PureExportSet (protects from GC).</summary>
+    [LibraryImport(LibraryName)]
+    public static unsafe partial void GciSaveObjs(ulong* theOops, int numOops);
+
     /// <summary>void GciClearStack(OopType gsProcess); — abandon a suspended execution.</summary>
     [LibraryImport(LibraryName)]
     public static partial void GciClearStack(ulong gsProcess);

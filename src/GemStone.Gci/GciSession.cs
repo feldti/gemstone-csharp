@@ -226,6 +226,25 @@ public sealed partial class GciSession : IDisposable
     }
 
     /// <summary>
+    /// Adds OOPs to the PureExportSet (GciSaveObjs), so that the gem does not garbage-collect
+    /// them while the client holds them, e.g. temporary objects found by a traversal. Undo with
+    /// <see cref="Release"/>. The export set is a set: one Release cancels any number of Retains.
+    /// </summary>
+    public unsafe void Retain(params Oop[] oops)
+    {
+        ArgumentNullException.ThrowIfNull(oops);
+        var heapOops = Array.FindAll(oops, o => !o.IsSpecial && o != Oop.Illegal);
+        if (heapOops.Length == 0) return;
+        lock (Sync)
+        {
+            Activate();
+            fixed (Oop* p = heapOops)
+                GciNative.GciSaveObjs((ulong*)p, heapOops.Length);
+            ThrowIfError();
+        }
+    }
+
+    /// <summary>
     /// Interrupts Smalltalk code this session is currently running; the running
     /// <see cref="Execute"/>/<see cref="Perform"/> then throws a <see cref="GciException"/>
     /// (RT_ERR_SOFT_BREAK). Called from another thread while the call is in progress, so it

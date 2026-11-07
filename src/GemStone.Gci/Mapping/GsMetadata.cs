@@ -56,6 +56,7 @@ internal sealed class GsPropertyMap
     public required GsShape Shape { get; init; }
     public IGsValueConverter? Converter { get; init; }
     public GsCollectionKind? CollectionKind { get; init; }
+    public bool ReadOnly { get; init; }
 
     /// <summary>1-based named instVar index in the GemStone class.</summary>
     public int Index { get; set; }
@@ -195,7 +196,11 @@ internal sealed class GsShapeFactory
             if (kind is not null and not GsCollectionKind.Dictionary && propShape.Kind == GsShapeKind.Dictionary)
                 errors.Add($"{where}: a dictionary property type needs [GsCollection(Dictionary)] or none.");
 
-            map.Properties.Add(new GsPropertyMap { Property = p, InstVar = iv.Name, Shape = propShape, Converter = converter, CollectionKind = kind });
+            map.Properties.Add(new GsPropertyMap
+            {
+                Property = p, InstVar = iv.Name, Shape = propShape, Converter = converter, CollectionKind = kind,
+                ReadOnly = p.GetCustomAttribute<GsReadOnlyAttribute>() is not null,
+            });
         }
 
         // C# subclasses mapped to GemStone subclasses (polymorphic loading), most derived first.

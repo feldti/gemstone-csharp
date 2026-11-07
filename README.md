@@ -49,10 +49,10 @@ convert values, run transactions, read and write objects, and load object graphs
 - **Traversals:** load a whole object graph in one round trip (`Traverse`, `ExecuteTraverse`,
   `PerformTraverse`) and decode it offline. `FetchPaths` reads instance-variable paths from many
   objects at once.
-- **Object mapping (read-only):** load GemStone objects into your own C# classes, mapped with
-  attributes. Instance-variable names may differ from property names. Shared references,
-  cycles, subclasses and collections are handled, and mapping errors are reported with
-  suggestions.
+- **Object mapping:** load GemStone objects into your own C# classes, mapped with attributes,
+  and write changes back with `SaveChanges`. Instance-variable names may differ from property
+  names. Shared references, cycles, subclasses and collections are handled, and mapping errors
+  are reported with suggestions.
 
 ## Requirements
 
@@ -113,10 +113,26 @@ public class Account
     [GsInstVar("state")] public AccountStatus Status { get; set; }   // Symbol #active → enum
 }
 
-var ctx = new GsObjectContext(session);
+using var ctx = new GsObjectContext(session);
 ctx.Validate(typeof(Account));   // check the mapping against the image
 var accounts = ctx.Load<List<Account>>("UserGlobals at: #Accounts");
+
+accounts[0].Balance += 100m;
+accounts[0].Address = new Address { City = "Köln" };   // new object
+accounts[0].Orders.Add(new Order { Number = 42 });     // collection rewritten in place
+ctx.SaveChanges();                                     // writes only what changed
+session.Commit();
 ```
+
+How `SaveChanges` works:
+- **Change tracking:** the context remembers the loaded state and keeps the loaded objects in
+  the export set until it is disposed. Turn this off for pure reading with
+  `GsLoadOptions { TrackChanges = false }`.
+- **What it writes:** only properties and collections whose contents changed. New C# objects
+  are created with `new` on their GemStone class. Strings and enums that were Symbols are
+  written back as Symbols.
+- **What it doesn't do:** it doesn't commit. If a save fails halfway, abort, `Clear()` the
+  context and reload.
 
 Supported collection types:
 - Array, OrderedCollection, SortedCollection → `List<T>` / `T[]`
@@ -124,8 +140,8 @@ Supported collection types:
 - Bag → `List<T>`
 - any AbstractDictionary → `Dictionary<K,V>`
 
-The mapper uses reflection, so it is not trimming- or AOT-safe yet. Writing objects back is not
-implemented yet.
+The mapper uses reflection, so it is not trimming- or AOT-safe yet. A changed collection is
+rewritten as a whole, and nested collections (`List<List<T>>`) cannot be saved yet.
 
 ## Building and testing
 
@@ -185,7 +201,7 @@ Other differences from the manual, taken from the 3.7.5 headers:
 ```
 src/GemStone.Gci/           the library
   Native/                   raw P/Invoke layer (internal), struct mirrors, library resolver
-  Mapping/                  attribute-based object mapper
+  Mapping/                  attribute-based object mapper (load + SaveChanges)
 tests/GemStone.Gci.Tests/   unit tests and integration tests ([StoneFact])
 samples/GsRepl/             interactive console (separate solution)
 docs/                       bug reports and notes
@@ -193,9 +209,9 @@ docs/                       bug reports and notes
 
 ## Not implemented yet
 
-- Writing mapped objects back (`SaveChanges`)
+- Incremental collection updates and batched writes (store traversals) for `SaveChanges`
 - A source generator for the mapper, for AOT/trimming
-- Store traversals (`GciStoreTrav`) and clamped traversals
+- Clamped traversals
 - Mapping Fraction values
 - `GciContinue` after errors
 - User actions

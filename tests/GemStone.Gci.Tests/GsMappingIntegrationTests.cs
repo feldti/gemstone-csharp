@@ -314,13 +314,26 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     public void LoadingDoesNotGrowTheExportSet()
     {
         long Size() => S.Evaluate<long>("System hiddenSetSize: (System HiddenSetSpecifiers indexOf: 'PureExportSet')");
-        new GsObjectContext(S).Load<Holder>("UserGlobals at: #GsMapTestHolderObj"); // warm up caches
+        // Warm up caches (the session resolves Date/DateAndTime once and keeps them).
+        using (var warm = new GsObjectContext(S))
+        {
+            warm.Load<Holder>("UserGlobals at: #GsMapTestHolderObj");
+            warm.Load<List<Account>>("UserGlobals at: #GsMapTestAccounts");
+        }
         var before = Size();
         for (var i = 0; i < 5; i++)
         {
-            new GsObjectContext(S).Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", new GsLoadOptions { Depth = 1 });
-            new GsObjectContext(S).Load<Holder>("UserGlobals at: #GsMapTestHolderObj");
+            using (var ctx = new GsObjectContext(S))
+                ctx.Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", new GsLoadOptions { Depth = 1 });
+            using (var ctx = new GsObjectContext(S))
+                ctx.Load<Holder>("UserGlobals at: #GsMapTestHolderObj");
         }
+        Assert.Equal(before, Size());
+
+        // Without change tracking nothing is held, even without Dispose.
+        var readOnly = new GsLoadOptions { TrackChanges = false };
+        new GsObjectContext(S).Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", readOnly);
+        new GsObjectContext(S).Load<Holder>("UserGlobals at: #GsMapTestHolderObj", readOnly);
         Assert.Equal(before, Size());
     }
 }
