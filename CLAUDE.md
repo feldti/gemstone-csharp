@@ -41,6 +41,10 @@ dotnet test
 # dritter Stone mit 3.6.5: test365 (GsDevKit_stones-Registry work, /datadisk/pas/registry/gsdevkit_stones/stones/work/test365.ston), NetLDI test365_ldi, Port 37497
 # GEMSTONE=/datadisk/pas/work/products/GemStone64Bit3.6.5-x86_64.Linux GS_TEST_STONE=test365 GS_TEST_GEM_SERVICE='!@localhost#netldi:37497!gemnetobject'
 
+# vierter Stone mit 3.7.2: es2025 (Registry election, NetLDI es2025_ldi, Port 37441). Wirkt wie eine echte Datenbank:
+# keine Absturz-Proben (GciFetchPaths) dort; die Suite selbst committet nur temporäre GemStoneGciTest_*-Schlüssel und räumt sie weg.
+# GEMSTONE=/datadisk/pas/election/products/GemStone64Bit3.7.2-x86_64.Linux GS_TEST_STONE=es2025 GS_TEST_GEM_SERVICE='!@localhost#netldi:37441!gemnetobject'
+
 # interaktive Konsole (eigene Variablen GS_STONE, GS_GEM_SERVICE, GS_USER, GS_PASSWORD bzw. --Optionen)
 GS_GEM_SERVICE="$GS_TEST_GEM_SERVICE" GS_PASSWORD=swordfish dotnet run --project samples/GsRepl
 dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
