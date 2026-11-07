@@ -337,6 +337,10 @@ public sealed partial class GsObjectContext
         private readonly GciSession _session = ctx._session;
         private readonly Dictionary<Oop, GciObjectReport> _reports = [];
         private readonly Dictionary<Oop, Oop[]> _flattened = [];
+
+        /// <summary>Values the traversal cannot decode (LargeInteger, ScaledDecimal, date/time …), converted in one batch.</summary>
+        private readonly HashSet<Oop> _toConvert = [];
+        private readonly Dictionary<Oop, object?> _converted = [];
         private readonly Dictionary<(Oop, GsTypeMap), GsTypeMap> _actualMaps = [];
         private readonly Queue<(object Instance, Oop Oop, GsTypeMap Map)> _fill = new();
         private readonly GciTraversalOptions _travOptions = new() { BufferSize = options.BufferSize };
@@ -358,6 +362,8 @@ public sealed partial class GsObjectContext
                 while (queue.TryDequeue(out var node))
                 {
                     var (oop, s, where) = node;
+                    if (s.Kind is GsShapeKind.Scalar or GsShapeKind.Object && oop.IsSpecial && GciTraversal.Decode(oop, _reports) is Oop)
+                        _toConvert.Add(oop); // SmallScaledDecimal, SmallDate, SmallDateAndTime …
                     if (!NeedsReport(oop, s) || !visited.Add((oop, s))) continue;
                     if (!_reports.TryGetValue(oop, out var report))
                     {
@@ -375,6 +381,9 @@ public sealed partial class GsObjectContext
                             var map = ActualMap(oop, report, s.Map!, where);
                             foreach (var p in map.Properties)
                                 queue.Enqueue((NamedValue(report, p, where), p.Shape, p.Path));
+                            break;
+                        case GsShapeKind.Scalar or GsShapeKind.Object:
+                            if (GciTraversal.Decode(oop, _reports) is Oop) _toConvert.Add(oop);
                             break;
                         case GsShapeKind.List or GsShapeKind.Array or GsShapeKind.Set or GsShapeKind.Dictionary:
                             var elements = Elements(oop, report, s, where);
@@ -483,6 +492,12 @@ public sealed partial class GsObjectContext
 
         public object? Build(Oop root, GsShape shape, string where)
         {
+            if (_toConvert.Count > 0)
+            {
+                Oop[] pending = [.. _toConvert];
+                var values = _session.ToValues(pending);
+                for (var i = 0; i < pending.Length; i++) _converted[pending[i]] = values[i];
+            }
             _root = root;
             var result = Value(root, shape, where, null);
             while (_fill.TryDequeue(out var job))
@@ -633,17 +648,15 @@ public sealed partial class GsObjectContext
 
         /// <summary>
         /// Offline decoding; values the traversal cannot decode (LargeInteger, ScaledDecimal,
-        /// date/time …) are converted by the session (one round trip each).
+        /// date/time …) were converted in one batch before building (<see cref="GciSession.ToValues"/>).
         /// </summary>
         private object? Decode(Oop oop, bool forScalar)
         {
             var value = GciTraversal.Decode(oop, _reports);
             if (value is not Oop) return value;
-            if (forScalar) return _session.ToValue(oop);
-            // Untyped (object) properties: only the cheap, well-known value classes.
-            if (oop.IsSpecial) return _session.ToValue(oop);
-            var cls = _reports.TryGetValue(oop, out var r) ? r.Class : Oop.Illegal;
-            return cls == KnownClasses.LargeInteger || cls == KnownClasses.ScaledDecimal ? _session.ToValue(oop) : oop;
+            if (_converted.TryGetValue(oop, out var converted)) return converted; // batch (ToValues)
+            // Not collected during discovery (should not happen): convert on its own.
+            return forScalar || oop.IsSpecial ? _session.ToValue(oop) : oop;
         }
 
         private object? Coerce(object? value, GsShape shape, string where)

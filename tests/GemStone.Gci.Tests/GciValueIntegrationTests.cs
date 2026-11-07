@@ -205,4 +205,39 @@ public class GciValueIntegrationTests
         Assert.Throws<ArgumentException>(() => s.FromValue(new object()));
         Assert.True(s.IsLoggedIn);
     }
+
+    [StoneFact]
+    public void ToValuesMatchesToValueInOneBatch()
+    {
+        using var s = StoneEnv.Login();
+        var array = s.Execute("""
+            { nil. true. 42. 1.5. $a. 2 raisedTo: 100. (2 raisedTo: 100) negated. 1234.56s2. -0.01s2.
+              99999999999999999999.99s2. 'abc'. #sym. 'Köln' asUnicodeString. 'x' encodeAsUTF8.
+              1.0e300. 1.5e0 asSmallFloat. #[1 2 3].
+              DateAndTime year: 2024 month: 2 day: 29 hour: 12 minute: 30 second: (45123456/1000000) offset: (Duration seconds: 3600).
+              Date newDay: 15 monthNumber: 3 year: 2021. Time fromSeconds: 3661. 3/4. Object new }
+            """);
+        try
+        {
+            var elements = s.FetchVaryingOops(array);
+            var before = s.CallCount;
+            var batch = s.ToValues(elements);
+            var batchCalls = s.CallCount - before;
+
+            Assert.Equal(elements.Length, batch.Length);
+            for (var i = 0; i < elements.Length; i++)
+            {
+                var single = s.ToValue(elements[i]);
+                if (single is byte[] bytes) Assert.Equal(bytes, Assert.IsType<byte[]>(batch[i]));
+                else Assert.Equal(single, batch[i]);
+            }
+            Assert.IsType<Oop>(batch[^1]);   // Object new: no .NET counterpart
+            Assert.IsType<Oop>(batch[^2]);   // Fraction
+            Assert.InRange(batchCalls, 1, 10);
+        }
+        finally
+        {
+            s.Release(array);
+        }
+    }
 }

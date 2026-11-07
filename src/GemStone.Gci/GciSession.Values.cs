@@ -376,6 +376,109 @@ public sealed partial class GciSession
             value >= long.MinValue && value <= long.MaxValue ? (object)(long)value : value;
     }
 
+    // Server side of ToValues: one tagged Array per object, readable offline from a traversal.
+    // Same arithmetic as the single-value conversions (ToDecimal, ToDateOnly, ToTimeOnly …),
+    // nothing is parsed from locale-dependent printString output (Integer printString is plain digits).
+    private const string ToValuesBlock =
+        "[:objs | objs collect: [:x |" +
+        " (x isKindOf: Integer) ifTrue: [{1. x printString}] ifFalse: [" +
+        " (x isKindOf: ScaledDecimal) ifTrue: [{2. (x * (10 raisedTo: x scale)) rounded printString. x scale}] ifFalse: [" +
+        " (x isKindOf: DateAndTime) ifTrue: [{3. (x asPosixSeconds * 1000000) rounded printString. x offset asSeconds}] ifFalse: [" +
+        " (x isKindOf: Date) ifTrue: [{4. x asDays}] ifFalse: [" +
+        " (x isKindOf: Time) ifTrue: [{5. x asMicroseconds}] ifFalse: [" +
+        " (x isKindOf: CharacterCollection) ifTrue: [{6. x asUnicodeString}] ifFalse: [" +
+        " (x isKindOf: BinaryFloat) ifTrue: [{7. x asFloat}] ifFalse: [" +
+        " (x isKindOf: Utf8) ifTrue: [{6. x decodeToUnicode}] ifFalse: [" + // Utf8 is a ByteArray, not a CharacterCollection
+        " (x isKindOf: ByteArray) ifTrue: [{8. ByteArray withAll: x}] ifFalse: [0]]]]]]]]]]]";
+
+    /// <summary>
+    /// <see cref="ToValue"/> for many objects in one round trip (plus a few fixed ones), instead of
+    /// one or more per object. Immediate values are decoded locally; objects that have no .NET
+    /// counterpart are returned as their <see cref="Oop"/>, as with <see cref="ToValue"/>.
+    /// </summary>
+    /// <exception cref="OverflowException">A ScaledDecimal does not fit <see cref="decimal"/>.</exception>
+    public object?[] ToValues(IReadOnlyList<Oop> objects)
+    {
+        ArgumentNullException.ThrowIfNull(objects);
+        var result = new object?[objects.Count];
+        var pending = new List<int>();
+        for (var i = 0; i < objects.Count; i++)
+        {
+            var o = objects[i];
+            if (o.IsNil) result[i] = null;
+            else if (o.IsBoolean) result[i] = o.ToBoolean();
+            else if (o.IsSmallInteger) result[i] = o.ToSmallInteger();
+            else if (o.IsSmallDouble) result[i] = o.ToSmallDouble();
+            else if (o.IsCharacter) result[i] = o.ToCharacter();
+            else pending.Add(i);
+        }
+        if (pending.Count == 0) return result;
+
+        lock (Sync)
+        {
+            var array = NewObject(KnownClasses.Array, pending.Count);
+            var block = Oop.Nil;
+            try
+            {
+                StoreVaryingOops(array, 1, [.. pending.Select(i => objects[i])]);
+                block = Execute(ToValuesBlock);
+                var t = PerformTraverse(block, "value:", 3, [array], null);
+                var tagged = t[t.Result!.Value].Indexed.ToArray();
+                for (var k = 0; k < pending.Count; k++)
+                {
+                    var i = pending[k];
+                    result[i] = tagged[k].IsSpecial ? objects[i] : Untag(t, t[tagged[k]].Indexed.ToArray(), objects[i]);
+                }
+                return result;
+            }
+            finally
+            {
+                Release(array, block);
+            }
+        }
+
+        static object? Untag(GciTraversal t, Oop[] items, Oop original)
+        {
+            string Text(int i) => t.ToValue(items[i]) as string ?? throw new GciException($"Unexpected conversion result for {original}.");
+            long Small(int i) => items[i].ToSmallInteger();
+            switch (Small(0))
+            {
+                case 1:
+                {
+                    var big = BigInteger.Parse(Text(1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                    return big >= long.MinValue && big <= long.MaxValue ? (object)(long)big : big;
+                }
+                case 2:
+                {
+                    var scale = Small(2);
+                    if (scale is < 0 or > 28)
+                        throw new OverflowException($"ScaledDecimal scale {scale} is outside the .NET decimal range (0–28).");
+                    var unscaled = BigInteger.Parse(Text(1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                    return (decimal)unscaled / (decimal)BigInteger.Pow(10, (int)scale);
+                }
+                case 3:
+                {
+                    var micros = long.Parse(Text(1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                    var offsetSeconds = Small(2);
+                    var utc = new DateTimeOffset(GciPosixDateAndTime.PosixEpoch.Ticks + micros * TimeSpan.TicksPerMicrosecond, TimeSpan.Zero);
+                    return offsetSeconds % 60 == 0 ? utc.ToOffset(TimeSpan.FromSeconds(offsetSeconds)) : utc;
+                }
+                case 4:
+                    return DateOnly.FromDayNumber((int)(Small(1) + SmalltalkDateBase));
+                case 5:
+                    return new TimeOnly(Small(1) * TimeSpan.TicksPerMicrosecond);
+                case 6:
+                    return Text(1);
+                case 7:
+                    return t.ToValue(items[1]) is double d ? d : throw new GciException($"Unexpected conversion result for {original}.");
+                case 8:
+                    return t.ToValue(items[1]) as byte[] ?? throw new GciException($"Unexpected conversion result for {original}.");
+                default:
+                    return original;
+            }
+        }
+    }
+
     /// <summary>
     /// Creates the GemStone counterpart of a .NET value: <c>null</c>, <see cref="bool"/>, integer
     /// types, <see cref="BigInteger"/>, <see cref="float"/>/<see cref="double"/>, <see cref="decimal"/>

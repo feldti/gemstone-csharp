@@ -305,8 +305,12 @@ public sealed partial class GciSession : IDisposable
     /// Guard for every native call (caller holds <see cref="Sync"/>): throws if logged out, then
     /// makes this session the GCI's current session.
     /// </summary>
+    /// <summary>Number of GCI calls made through <see cref="Activate"/> (roughly: round trips), for tests.</summary>
+    internal long CallCount { get; private set; }
+
     private void Activate()
     {
+        CallCount++;
         SwitchTo();
         if (_nbInProgress)
             throw new InvalidOperationException(

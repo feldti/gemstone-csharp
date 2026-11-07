@@ -241,9 +241,24 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     }
 
     [StoneFact]
+    public void ServerConvertedValuesAreBatched()
+    {
+        // 3000 Balances (SmallScaledDecimal) used to cost several round trips each.
+        using (var warm = new GsObjectContext(S)) warm.Load<Account[]>("UserGlobals at: #GsMapTestMany");
+        var before = S.CallCount;
+        using var ctx = new GsObjectContext(S);
+        var many = ctx.Load<Account[]>("UserGlobals at: #GsMapTestMany", new GsLoadOptions { TrackChanges = false });
+        var calls = S.CallCount - before;
+
+        Assert.Equal(3000, many.Length);
+        Assert.Equal(1234m, many[1233].Balance);
+        Assert.InRange(calls, 1, 200); // measured: 75 (12068 with one conversion per value)
+    }
+
+    [StoneFact]
     public void ManyObjectsAcrossSeveralBuffers()
     {
-        var ctx = new GsObjectContext(S);
+        using var ctx = new GsObjectContext(S);
         var many = ctx.Load<Account[]>("UserGlobals at: #GsMapTestMany", new GsLoadOptions { BufferSize = 16 * 1024 });
 
         Assert.Equal(3000, many.Length);

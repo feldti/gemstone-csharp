@@ -40,7 +40,7 @@ convert values, run transactions, read and write objects, and load object graphs
   | Time | `TimeOnly` |
 
   Immediate values (SmallInteger, SmallDouble, Character, Boolean) are decoded locally, without
-  a round trip.
+  a round trip. `ToValues` converts many objects in one round trip.
 - **Transactions:** `Commit` / `TryCommit` / `Abort` / `Begin`, transaction modes, conflict
   detection (`GciTransactionConflictException`), and `RunInTransaction` with retry.
 - **Structural object access:** named and indexed instance variables, bytes, NSCs, `NewObject`,
@@ -141,6 +141,9 @@ How `SaveChanges` works:
 - **What it writes:** only properties and collections whose contents changed. New C# objects
   are created with `new` on their GemStone class. Strings and enums that were Symbols are
   written back as Symbols.
+- **Loading is batched:** values a traversal cannot decode locally (large ScaledDecimals,
+  LargeIntegers, DateAndTime/Date/Time) are converted in one round trip per load. Loading 3,000
+  accounts with a `decimal` balance takes 75 GCI calls instead of 12,068.
 - **What it doesn't do:** it doesn't commit. If a save fails halfway, abort, `Clear()` the
   context and reload.
 
