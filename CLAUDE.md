@@ -10,8 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Befehle
 
 ```bash
-dotnet build                                   # Bibliothek + Tests (GemStone.Gci.slnx, net10.0)
-dotnet test                                    # alle Tests
+dotnet build                                   # Bibliothek (net10.0 + net48) + Tests (GemStone.Gci.slnx)
+dotnet test                                    # alle Tests (unter Linux nur net10.0)
+tests/Net48Runner/run.sh                       # dieselben Tests gegen den net48-Build mit Mono (braucht mono-complete)
 dotnet test --filter "FullyQualifiedName~GciErrSTypeLayoutTests"   # einzelne Testklasse
 
 # Samples sind eigenständig (eigene .slnx, nicht Teil von GemStone.Gci.slnx), daher separat bauen:
@@ -45,8 +46,8 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
 ## Architektur
 
 - `src/GemStone.Gci/Native/` — rohe Interop-Schicht, `internal`:
-  - `GciNative.cs` — `[LibraryImport]`-Deklarationen unter dem logischen Namen `gcirpc`. `BoolType` → `[return: MarshalAs(UnmanagedType.Bool)] bool`, `const char[]` → UTF-8-`string`. Signaturen immer gegen `$GEMSTONE/include/gci.hf` prüfen, nicht nur gegen das Handbuch: `int` und `int64` bei Index- und Anzahl-Parametern unterscheiden sich je nach Funktion. Manche Namen sind Makros (`GciStoreBytes` → `GciStoreBytesInstanceOf`). `GciNativeExportTests` prüft, dass jeder Import in der Bibliothek existiert.
-  - `GciLibraryResolver.cs` — per `[ModuleInitializer]` registrierter `DllImportResolver`. Er bildet `gcirpc` auf die versionierte Datei ab (`.so`/`.dylib`/`.dll`, die höchste Version gewinnt), in dieser Reihenfolge: `GEMSTONE_GCI_LIBRARY` → `$GEMSTONE/lib` → `$GEMSTONE/bin` (Windows-Client) → Verzeichnis der Anwendung → OS-Suche.
+  - `GciNative.cs` — Einstiegspunkte als C#-Funktionszeiger (`delegate* unmanaged[Cdecl]<…>`), keine `[LibraryImport]`/`[DllImport]`. Der Grund: Unter .NET Framework gibt es keinen DllImport-Resolver, und die Datei heißt versioniert (`libgcirpc-3.7.5-64.dll`). Jede Funktion ist eine Wrapper-Methode mit verwalteter Signatur plus ein Feld `private static nint _Name`. Die Adresse holt `Fn(ref _Name, "Name")` beim ersten Aufruf. `BoolType` ist nativ `int` (`!= 0`), `const char[]` wird per `Utf8Z` + `fixed` als null-terminiertes UTF-8 übergeben. Neue Funktionen genau nach diesem Muster anlegen. Signaturen immer gegen `$GEMSTONE/include/gci.hf` prüfen, nicht nur gegen das Handbuch: `int` und `int64` bei Index- und Anzahl-Parametern unterscheiden sich je nach Funktion. Manche Namen sind Makros (`GciStoreBytes` → `GciStoreBytesInstanceOf`). `GciNativeExportTests` prüft über `GciNative.EntryPointNames()` (die `_Name`-Felder), dass jeder Einstiegspunkt in der Bibliothek existiert.
+  - `GciLibraryResolver.cs` liefert die Kandidaten, `GciLibrary.cs` lädt einmalig per Pfad: unter .NET mit `NativeLibrary`, im net48-Build unter Windows mit `LoadLibraryExW(LOAD_WITH_ALTERED_SEARCH_PATH)`/`GetProcAddress`, unter Mono mit `dlopen`/`dlsym`. Die versionierte Datei (`.so`/`.dylib`/`.dll`, die höchste Version gewinnt) wird in dieser Reihenfolge gesucht: `GEMSTONE_GCI_LIBRARY` → `$GEMSTONE/lib` → `$GEMSTONE/bin` (Windows-Client) → Verzeichnis der Anwendung → OS-Suche.
   - `GciErrSType.cs` — blittable Spiegel der nativen Struktur mit Fixed Buffers; Offsets und Größe (2168 Byte) werden von `GciErrSTypeLayoutTests` abgesichert. Neue native Structs genauso anlegen und ebenso mit Layout-Tests absichern.
 - `src/GemStone.Gci/` — öffentliche API: `GciSession` (`GciInit` einmal pro Prozess, `GciSetNet` + `GciLoginEx` mit `GciLoginFlags.Quiet` als Standard, `Dispose` → `GciLogout`) und `GciException` (aus `GciErr`).
 - Die klassische GCI ist nicht thread-sicher und hat eine „aktuelle Session“ pro Prozess. Mehrere `GciSession`s sind trotzdem möglich: Jeder native Aufruf läuft unter dem prozessweiten Lock `GciSession.Sync` und hinter `Activate()`. `Activate()` wirft bei ausgeloggter Session und macht die eigene Session per `GciSetSessionId` zur aktuellen. Neue native Aufrufe immer hinter `Activate()` stellen. `SwitchTo()` (ohne Prüfung auf laufende Async-Operation) nur fürs Abfragen von Nb-Aufrufen und für `Dispose` verwenden. OOPs temporärer Objekte gehören zu ihrer Session.
@@ -93,6 +94,22 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
 - Integrationstests laufen in der xUnit-Collection `"Stone"` ohne Parallelisierung, weil es nur eine GCI-Session pro Prozess gibt.
 - `OopType` ist in GemStone/S 64 Bit **64 Bit** (`ulong`). Das Handbuch (Kap. 6.3) schreibt fälschlich „32-bit“.
 
+## .NET Framework 4.8 (net48)
+
+- **Ziele:** Die Bibliothek baut für `net10.0` und `net48` (`TargetFrameworks` im csproj; `TargetFramework` aus `Directory.Build.props` wird dort geleert). `net48` ist für bestehende WinForms-Anwendungen gedacht. Die müssen als **x64-Prozess** laufen, weil GemStone 3.7 nur 64-Bit-Client-DLLs liefert.
+- **Pakete nur für net48:** `System.Memory`, `Portable.System.DateTimeOnly` (öffentliche `DateOnly`/`TimeOnly`), `PolySharp` (Compiler-Attribute) und die Referenz `System.Numerics`.
+- **Ersatzfunktionen:** `src/GemStone.Gci/Polyfills/NetFrameworkPolyfills.cs` (nur `#if !NET`):
+  - statische Erweiterungsmember aus C# 14 (`extension(ArgumentNullException) { ThrowIfNull … }`, `Environment.TickCount64`, `Encoding.Latin1`, `decimal.Scale` …), dazu klassische Erweiterungen (`TryDequeue`, `TryAdd`, `Chunk`);
+  - `ReferenceEqualityComparer`, `NativeMemory` und `Ascii` als interne Typen;
+  - ein **öffentliches** `System.Text.Rune`, damit die API auf beiden Zielen gleich bleibt.
+
+  Fehlt etwas Neues aus der BCL, zuerst hier ergänzen. `#if` im Code nur, wo es nicht anders geht (`GeneratedRegex`, `IReadOnlySet`).
+- **Nicht auf net48 verfügbar:**
+  - Standard-Implementierungen in Interfaces, deshalb `IGsTwoWayConverter` als eigenes Interface;
+  - Range-Zugriff auf Arrays (`arr[..n]` braucht `RuntimeHelpers.GetSubArray`), stattdessen `AsSpan(0, n).ToArray()`;
+  - `nint` → `nuint`-Casts.
+- **Tests gegen den net48-Build:** Das Testprojekt bekommt `net48` nur unter Windows oder mit `-p:WithNet48Tests=true`, weil `dotnet test` net48 unter Linux nicht hosten kann. Unter Linux startet `tests/Net48Runner/run.sh` einen minimalen xUnit-Runner (Reflection: Fact/Theory, InlineData/MemberData, Klassen-Fixtures, async) mit Mono. Mono braucht dafür seine Facade-Assemblies (`System.Runtime.dll` …, Paket `mono-complete`); die Referenz-Facades aus `Microsoft.NETFramework.ReferenceAssemblies` lädt Mono nicht. Mono ist nicht das echte .NET Framework; der endgültige Test ist ein Windows-Rechner.
+
 ## Verzeichnisstruktur
 
 - `gemstone-c/` — Markdown-Konvertierung des Handbuchs *GemBuilder for C* (GemStone/S 64 Bit 3.7, Sept. 2023), aufbereitet für KI-Werkzeuge. **Nur lokal, nicht im Git-Repository** (Urheberrecht GemTalk, steht in `.gitignore`). In einem frischen Klon fehlt das Verzeichnis; dann direkt `$GEMSTONE/include/*.hf`/`*.ht` und das PDF-Handbuch nutzen.
@@ -104,7 +121,7 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
 
 ## Hinweise für die C#-Anbindung
 
-- Windows wird nur als Client unterstützt, und nur x64 (`GciSession.EnsureInitialized` prüft `Is64BitProcess`). Unter x64 gibt es nur eine Aufrufkonvention, die Header definieren nur `__declspec(dllimport)`; dieselben `[LibraryImport]`-Signaturen gelten also für Linux und Windows. `GCI_WINDOWS_CLIENT` setzt die Bibliothek selbst. Die Windows-Konsole muss für Nicht-ASCII-Zeichen auf UTF-8 umgestellt werden (siehe `samples/GsRepl/Program.cs`). Gegen einen echten Windows-Client ist das noch nicht getestet.
+- Windows wird nur als Client unterstützt, und nur x64 (`GciSession.EnsureInitialized` prüft `Is64BitProcess`). Unter x64 gibt es nur eine Aufrufkonvention, die Header definieren nur `__declspec(dllimport)`; dieselben Funktionszeiger-Signaturen gelten also für Linux und Windows. `GCI_WINDOWS_CLIENT` setzt die Bibliothek selbst. Die Windows-Konsole muss für Nicht-ASCII-Zeichen auf UTF-8 umgestellt werden (siehe `samples/GsRepl/Program.cs`). Gegen einen echten Windows-Client ist das noch nicht getestet.
 
 - Makros wie `GCI_OOP_IS_SMALL_INT`, `GCI_BOOL_TO_OOP` oder `GCI_CHR_TO_OOP` sind keine exportierten Funktionen; sie müssen in C# anhand der OOP-Bitkodierung nachgebaut werden (Details in der jeweiligen Makro-Datei).
 - Die Dokumentation beschreibt die klassische (nicht thread-sichere) GCI (`gci.hf`); `gcilegacy.ht` enthält Definitionen, die nur dort und nicht in der thread-sicheren GCI genutzt werden.

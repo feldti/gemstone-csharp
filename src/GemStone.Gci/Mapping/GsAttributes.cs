@@ -87,12 +87,17 @@ public interface IGsValueConverter
     /// (also for Symbols), <c>byte[]</c>, date/time values, or the <see cref="Oop"/> for anything else.
     /// </summary>
     object? FromGemStone(object? value, Type targetType);
+}
 
+/// <summary>
+/// A converter that can also write: <see cref="GsObjectContext.SaveChanges"/> needs it for changed
+/// values (a plain <see cref="IGsValueConverter"/> makes saving a changed value throw).
+/// </summary>
+public interface IGsTwoWayConverter : IGsValueConverter
+{
     /// <summary>
-    /// Converts a property value back for <see cref="GsObjectContext.SaveChanges"/>: return a .NET
-    /// value that <see cref="GciSession.FromValue"/> understands (or an <see cref="Oop"/>).
-    /// Read-only converters can leave the default; saving a changed value then throws.
+    /// Converts a property value back: return a .NET value that <see cref="GciSession.FromValue"/>
+    /// understands (or an <see cref="Oop"/>).
     /// </summary>
-    object? ToGemStone(object? value, Type propertyType) =>
-        throw new NotSupportedException($"{GetType().Name} cannot convert values back to GemStone.");
+    object? ToGemStone(object? value, Type propertyType);
 }

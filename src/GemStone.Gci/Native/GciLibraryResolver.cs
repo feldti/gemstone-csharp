@@ -1,13 +1,10 @@
-using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace GemStone.Gci.Native;
 
 /// <summary>
-/// Resolves the logical library name <see cref="GciNative.LibraryName"/> to the versioned
-/// GemBuilder RPC library shipped with GemStone, e.g. <c>libgcirpc-3.7.5-64.so</c> (Linux),
+/// Finds the versioned GemBuilder RPC library shipped with GemStone (loaded by <see cref="GciLibrary"/>), e.g. <c>libgcirpc-3.7.5-64.so</c> (Linux),
 /// <c>libgcirpc-3.7.5-64.dylib</c> (macOS) or <c>libgcirpc-3.7.5-64.dll</c> (Windows client).
 /// </summary>
 /// <remarks>
@@ -28,49 +25,29 @@ internal static partial class GciLibraryResolver
     public const string GemStoneVariable = "GEMSTONE";
     public const string BaseName = "libgcirpc";
 
-#pragma warning disable CA2255 // ModuleInitializer is intended here: the resolver must be registered before the first P/Invoke.
-    [ModuleInitializer]
-#pragma warning restore CA2255
-    internal static void Register() =>
-        NativeLibrary.SetDllImportResolver(typeof(GciLibraryResolver).Assembly, Resolve);
-
-    private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
-    {
-        if (libraryName != GciNative.LibraryName)
-            return IntPtr.Zero;
-
-        foreach (var candidate in Candidates(Environment.GetEnvironmentVariable, AppContext.BaseDirectory, CurrentExtension))
-        {
-            if (NativeLibrary.TryLoad(candidate, out var handle))
-                return handle;
-        }
-
-        // Let the runtime report its standard DllNotFoundException.
-        return IntPtr.Zero;
-    }
-
     /// <summary>File extension of shared libraries on the current OS.</summary>
     internal static string CurrentExtension =>
-        OperatingSystem.IsWindows() ? ".dll" : OperatingSystem.IsMacOS() ? ".dylib" : ".so";
+        RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? ".dll"
+        : RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? ".dylib" : ".so";
 
     /// <summary>Library paths/names to try, in order. Pure function of its inputs, for tests.</summary>
     internal static IEnumerable<string> Candidates(Func<string, string?> getEnv, string? appDirectory, string extension)
     {
         var explicitPath = getEnv(LibraryPathVariable);
         if (!string.IsNullOrWhiteSpace(explicitPath))
-            yield return explicitPath;
+            yield return explicitPath!;
 
         var gemstone = getEnv(GemStoneVariable);
         if (!string.IsNullOrWhiteSpace(gemstone))
         {
-            foreach (var file in VersionedLibraries(Path.Combine(gemstone, "lib"), extension))
+            foreach (var file in VersionedLibraries(Path.Combine(gemstone!, "lib"), extension))
                 yield return file;
             foreach (var file in VersionedLibraries(Path.Combine(gemstone, "bin"), extension))
                 yield return file;
         }
 
         if (!string.IsNullOrWhiteSpace(appDirectory))
-            foreach (var file in VersionedLibraries(appDirectory, extension))
+            foreach (var file in VersionedLibraries(appDirectory!, extension))
                 yield return file;
 
         yield return BaseName;
@@ -95,6 +72,12 @@ internal static partial class GciLibraryResolver
         return match.Success && Version.TryParse(match.Groups[1].Value, out var v) ? v : new Version(0, 0);
     }
 
-    [GeneratedRegex(@"^libgcirpc-(\d+(?:\.\d+){1,3})", RegexOptions.CultureInvariant)]
+    private const string VersionRegex = @"^libgcirpc-(\d+(?:\.\d+){1,3})";
+#if NET7_0_OR_GREATER
+    [GeneratedRegex(VersionRegex, RegexOptions.CultureInvariant)]
     private static partial Regex VersionPattern();
+#else
+    private static readonly Regex VersionRegexInstance = new(VersionRegex, RegexOptions.CultureInvariant);
+    private static Regex VersionPattern() => VersionRegexInstance;
+#endif
 }

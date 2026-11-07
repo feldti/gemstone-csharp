@@ -169,7 +169,7 @@ public sealed partial class GciSession
             {
                 var n = GciNative.GciFetchNamedOops(obj.Value, 1, (ulong*)p, size);
                 ThrowIfError();
-                return n == size ? result : result[..n];
+                return n == size ? result : result.AsSpan(0, n).ToArray();
             }
         }
     }
@@ -252,7 +252,7 @@ public sealed partial class GciSession
                     var chunk = (int)Math.Min(OopChunkSize, total - done);
                     var n = GciNative.GciFetchVaryingOops(obj.Value, start + done, (ulong*)(p + done), chunk);
                     ThrowIfError();
-                    if (n <= 0) return result[..(int)done];
+                    if (n <= 0) return result.AsSpan(0, (int)done).ToArray();
                     done += n;
                 }
             }

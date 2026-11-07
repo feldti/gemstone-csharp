@@ -114,7 +114,11 @@ internal sealed class GsShapeFactory
                 shape.Element = ShapeOf(args[0], errors, where);
                 return shape;
             }
-            if (def == typeof(HashSet<>) || def == typeof(ISet<>) || def == typeof(IReadOnlySet<>))
+            if (def == typeof(HashSet<>) || def == typeof(ISet<>)
+#if NET
+                || def == typeof(IReadOnlySet<>)
+#endif
+                )
             {
                 var concrete = typeof(HashSet<>).MakeGenericType(args);
                 var shape = Add(new GsShape
@@ -153,7 +157,7 @@ internal sealed class GsShapeFactory
 
     private void BuildMap(GsShape shape, Type type, GsClassAttribute cls, List<string> errors)
     {
-        var ctor = type.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, Type.EmptyTypes);
+        var ctor = type.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
         var map = new GsTypeMap { Type = type, Class = cls, Constructor = ctor };
         shape.Map = map;
         NewMaps.Add(map);

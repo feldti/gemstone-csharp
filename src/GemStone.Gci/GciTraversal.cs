@@ -180,7 +180,7 @@ public sealed class GciTraversal
         if (c == KnownClasses.ByteArray)
             return bytes;
         if (c == KnownClasses.Float && bytes.Length == 8)
-            return BitConverter.ToDouble(bytes);
+            return BitConverter.ToDouble(bytes, 0);
         return oop;
     }
 

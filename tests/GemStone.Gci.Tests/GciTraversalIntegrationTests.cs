@@ -25,7 +25,7 @@ public class GciTraversalIntegrationTests
         using var s = StoneEnv.Login();
         var oop = s.Execute("-0.0");
         if (!oop.IsSmallDouble) return; // representation detail of the server
-        Assert.True(double.IsNegative(oop.ToSmallDouble()));
+        Assert.True(BitConverter.DoubleToInt64Bits(oop.ToSmallDouble()) < 0); // sign bit (also for -0.0)
     }
 
     [StoneFact]

@@ -169,7 +169,7 @@ public sealed partial class GciSession
             }
 
             await Task.Delay(delay, CancellationToken.None).ConfigureAwait(false);
-            if (delay < MaxPollDelay) delay *= 2;
+            if (delay < MaxPollDelay) delay = TimeSpan.FromTicks(delay.Ticks * 2);
         }
     }
 

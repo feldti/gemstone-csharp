@@ -1,10 +1,11 @@
+using System.Runtime.InteropServices;
 using GemStone.Gci.Native;
 
 namespace GemStone.Gci.Tests;
 
 public class GciLibraryResolverTests : IDisposable
 {
-    private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("gs-resolver-");
+    private readonly DirectoryInfo _root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "gs-resolver-" + Guid.NewGuid().ToString("N")));
 
     public void Dispose() => _root.Delete(recursive: true);
 
@@ -34,7 +35,7 @@ public class GciLibraryResolverTests : IDisposable
         };
 
         var candidates = GciLibraryResolver
-            .Candidates(k => env.GetValueOrDefault(k), Path.Combine(_root.FullName, "app"), ext)
+            .Candidates(k => env.TryGetValue(k, out var v) ? v : null, Path.Combine(_root.FullName, "app"), ext)
             .ToList();
 
         Assert.Equal(["/opt/custom/libgcirpc.x", lib, bin, app, "libgcirpc"], candidates);
@@ -61,7 +62,7 @@ public class GciLibraryResolverTests : IDisposable
     [Fact]
     public void CurrentExtensionMatchesPlatform()
     {
-        var expected = OperatingSystem.IsWindows() ? ".dll" : OperatingSystem.IsMacOS() ? ".dylib" : ".so";
+        var expected = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? ".dll" : RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? ".dylib" : ".so";
         Assert.Equal(expected, GciLibraryResolver.CurrentExtension);
     }
 }

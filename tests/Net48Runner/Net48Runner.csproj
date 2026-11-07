@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Minimal xUnit runner for the net48 build of the tests, for Mono on Linux (the xunit console
+    runner needs Mono assemblies such as System.Xml.Linq that a minimal Mono install lacks).
+    On Windows, "dotnet test -f net48" runs the same tests with the regular runner.
+    Build with -p:WithNet48Tests=true (outside Windows the test project offers net48 only then);
+    run.sh does both.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GemStone.Gci.Tests\GemStone.Gci.Tests.csproj" SetTargetFramework="TargetFramework=net48" />
+  </ItemGroup>
+
+</Project>

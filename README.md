@@ -2,7 +2,7 @@
 
 **🚧 Work in progress: not ready for production use. 🚧**
 
-A .NET 10 wrapper for **GemStone/S 64 Bit 3.7.x**, built on the classic (non-thread-safe)
+A .NET 10 and .NET Framework 4.8 wrapper for **GemStone/S 64 Bit 3.7.x**, built on the classic (non-thread-safe)
 **GemBuilder for C** (GCI, `libgcirpc`). It lets C# programs log in to a stone, run Smalltalk,
 convert values, run transactions, read and write objects, and load object graphs into C# classes.
 
@@ -13,7 +13,8 @@ convert values, run transactions, read and write objects, and load object graphs
 >
 > What exists is covered by integration tests against GemStone 3.7.5 and 3.7.6 on Linux x86-64.
 > The Windows client support is implemented but has not been tested against a real Windows
-> client yet.
+> client yet. The .NET Framework 4.8 build compiles, but has not been run on a real .NET
+> Framework installation yet.
 
 ## Features
 
@@ -56,7 +57,8 @@ convert values, run transactions, read and write objects, and load object graphs
 
 ## Requirements
 
-- .NET SDK 10.0
+- .NET SDK 10.0 to build. The library targets **.NET 10** and **.NET Framework 4.8**; the
+  latter is for existing Windows applications (WinForms, WPF), which must run as **x64** processes.
 - The GemStone/S 64 Bit 3.7.x client library (`libgcirpc-3.7.x-64.so`, or `.dll` on Windows),
   usually taken from a GemStone installation (`$GEMSTONE`)
 - A running stone and NetLDI to connect to
@@ -73,6 +75,14 @@ The wrapper looks for the versioned client library in this order; the highest ve
 
 On Linux, `libgcirpc` loads `libssl-*.so` and `libkrb5-*.so` at runtime. Ship them next to your
 binary if you run without `$GEMSTONE`.
+
+### .NET Framework 4.8
+
+The `net48` build has the same API. Differences:
+- `DateOnly` / `TimeOnly` come from the `Portable.System.DateTimeOnly` package.
+- `System.Text.Rune` is a small stand-in type shipped with the library.
+- The application must not run as a 32-bit process: set the platform target to `x64`, or
+  `AnyCPU` with "Prefer 32-bit" off.
 
 ## Quick start
 

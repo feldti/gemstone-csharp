@@ -155,8 +155,14 @@ public sealed partial class GsObjectContext
         return shape;
     }
 
-    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*$")]
+    private const string IdentifierRegex = @"^[A-Za-z_][A-Za-z0-9_]*$";
+#if NET7_0_OR_GREATER
+    [GeneratedRegex(IdentifierRegex)]
     private static partial Regex Identifier();
+#else
+    private static readonly Regex IdentifierInstance = new(IdentifierRegex);
+    private static Regex Identifier() => IdentifierInstance;
+#endif
 
     /// <summary>Resolves the GemStone class and the instVar indices of a type map.</summary>
     private void Resolve(GsTypeMap map, List<string> errors)

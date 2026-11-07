@@ -186,7 +186,7 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
         Assert.Equal(AccountStatus.Active, alice.Status);
         Assert.Equal(new DateOnly(2021, 3, 15), alice.Opened);
         Assert.Equal(42L, alice.Extra);
-        Assert.Equal(["eu", "vip"], alice.Tags.Order());
+        Assert.Equal(["eu", "vip"], alice.Tags.OrderBy(t => t, StringComparer.Ordinal));
         Assert.NotEqual(default, alice.Oop);
 
         Assert.Equal(2, alice.Orders.Count);
@@ -232,7 +232,7 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
         Assert.Equal([1L, "two", 3.5, null], h.Items!);
         Assert.Equal(2000, h.IdSet!.Count);                 // NSC read directly
         Assert.True(h.IdSet.SetEquals(Enumerable.Range(1, 2000).Select(i => (long)i)));
-        Assert.Equal(["x", "x", "y"], h.Bag!.Order());       // Bag: flattened on the server
+        Assert.Equal(["x", "x", "y"], h.Bag!.OrderBy(t => t, StringComparer.Ordinal));       // Bag: flattened on the server
         Assert.Equal("Köln", h.BySymbol!["home"].City);      // Symbol keys → string
         Assert.Equal("Portland", h.BySymbol["work"].City);
         Assert.Equal("ABC", h.Code);

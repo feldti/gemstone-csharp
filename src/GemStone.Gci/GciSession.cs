@@ -188,7 +188,7 @@ public sealed partial class GciSession : IDisposable
             {
                 var n = GciNative.GciFetchBytes_(obj.Value, 1, p, size);
                 ThrowIfError();
-                return n == size ? bytes : bytes[..(int)n];
+                return n == size ? bytes : bytes.AsSpan(0, (int)n).ToArray();
             }
         }
     }

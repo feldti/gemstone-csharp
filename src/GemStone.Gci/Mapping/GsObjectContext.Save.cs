@@ -333,7 +333,9 @@ public sealed partial class GsObjectContext : IDisposable
         private Oop ToOop(object? value, GsShape shape, GsPropertyMap? property, PropertySnapshot? snap, string where)
         {
             if (property?.Converter is { } converter)
-                return Scalar(converter.ToGemStone(value, property.Property.PropertyType), snap, where);
+                return converter is IGsTwoWayConverter twoWay
+                    ? Scalar(twoWay.ToGemStone(value, property.Property.PropertyType), snap, where)
+                    : throw new NotSupportedException($"{where}: {converter.GetType().Name} cannot convert values back to GemStone (implement IGsTwoWayConverter).");
             if (value is null) return Oop.Nil;
             return shape.Kind switch
             {

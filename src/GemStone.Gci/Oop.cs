@@ -114,7 +114,7 @@ public readonly record struct Oop(ulong Value)
             result = ((Value << 8) >> 12) | (expBits << 52);
         }
         result |= (Value & 0x8) << 60; // sign bit
-        return BitConverter.UInt64BitsToDouble(result);
+        return BitConverter.Int64BitsToDouble((long)result);
     }
 
     /// <summary>GCI_BOOL_TO_OOP.</summary>
