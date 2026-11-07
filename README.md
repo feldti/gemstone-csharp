@@ -2,7 +2,7 @@
 
 **🚧 Work in progress: not ready for production use. 🚧**
 
-A .NET 10 and .NET Framework 4.8 wrapper for **GemStone/S 64 Bit 3.7.x**, built on the classic (non-thread-safe)
+A .NET 10 and .NET Framework 4.8 wrapper for **GemStone/S 64 Bit 3.6 and 3.7**, built on the classic (non-thread-safe)
 **GemBuilder for C** (GCI, `libgcirpc`). It lets C# programs log in to a stone, run Smalltalk,
 convert values, run transactions, read and write objects, and load object graphs into C# classes.
 
@@ -11,7 +11,7 @@ convert values, run transactions, read and write objects, and load object graphs
 > use. APIs may change without notice, there are no releases or NuGet packages yet, and some
 > parts are missing (see [Not implemented yet](#not-implemented-yet)).
 >
-> What exists is covered by integration tests against GemStone 3.7.5 and 3.7.6 on Linux x86-64.
+> What exists is covered by integration tests against GemStone 3.6.5, 3.7.5 and 3.7.6 on Linux x86-64.
 > The Windows client support is implemented but has not been tested against a real Windows
 > client yet. The .NET Framework 4.8 build compiles, but has not been run on a real .NET
 > Framework installation yet.
@@ -59,7 +59,7 @@ convert values, run transactions, read and write objects, and load object graphs
 
 - .NET SDK 10.0 to build. The library targets **.NET 10** and **.NET Framework 4.8**; the
   latter is for existing Windows applications (WinForms, WPF), which must run as **x64** processes.
-- The GemStone/S 64 Bit 3.7.x client library (`libgcirpc-3.7.x-64.so`, or `.dll` on Windows),
+- The GemStone/S 64 Bit 3.6.x or 3.7.x client library (`libgcirpc-3.x.y-64.so`, or `.dll` on Windows),
   usually taken from a GemStone installation (`$GEMSTONE`)
 - A running stone and NetLDI to connect to
 - 64-bit process only: Linux x86-64; Windows x64 as a client
@@ -193,12 +193,15 @@ dotnet publish samples/GsRepl -c Release -r win-x64
 
 These were found while building the wrapper. The wrapper works around all of them.
 
-| Issue | 3.7.5 | 3.7.6 | Workaround in the wrapper |
-|---|---|---|---|
-| `GciFetchPaths` crashes the gem (SIGSEGV in `checkFetchPathOffset`) when a path step starts from `nil` or another special object, as in `address.street` with `address == nil`. The session is lost. | yes | yes | `FetchPaths` resolves one step per round trip and never steps from a special object. See [docs/bugreport-gcifetchpaths.md](docs/bugreport-gcifetchpaths.md). |
-| `GciExecuteStrTrav` leaves the source String in the PureExportSet on every call. | yes | fixed | `ExecuteTraverse` uses `Execute` + `Traverse`. |
-| `GciResolveSymbol` leaves a String with the name in the PureExportSet on every call. | yes | fixed | `ResolveSymbol` uses `GciResolveSymbolObj` with its own String, which it releases. |
-| `DateAndTime printString` fails ("unexpected format") when the NetLDI runs with a German `LC_NUMERIC`. | yes | – | Not a wrapper issue: start the NetLDI with `LC_NUMERIC=C`. The wrapper never parses locale-dependent `printString` output. |
+| Issue | 3.6.5 | 3.7.5 | 3.7.6 | Workaround in the wrapper |
+|---|---|---|---|---|
+| `GciFetchPaths` crashes the gem (SIGSEGV in `checkFetchPathOffset`) when a path step starts from `nil` or another special object, as in `address.street` with `address == nil`. The session is lost. | yes | yes | yes | `FetchPaths` resolves one step per round trip and never steps from a special object. See [docs/bugreport-gcifetchpaths.md](docs/bugreport-gcifetchpaths.md). |
+| `GciExecuteStrTrav` leaves the source String in the PureExportSet on every call. | yes | yes | fixed | `ExecuteTraverse` uses `Execute` + `Traverse`. |
+| `GciResolveSymbol` leaves a String with the name in the PureExportSet on every call. | yes | yes | fixed | `ResolveSymbol` uses `GciResolveSymbolObj` with its own String, which it releases. |
+| `DateAndTime printString` fails ("unexpected format") when the NetLDI runs with a German `LC_NUMERIC`. | – | yes | – | Not a wrapper issue: start the NetLDI with `LC_NUMERIC=C`. The wrapper never parses locale-dependent `printString` output. |
+
+| The 3.6.5 compiler fails on `Utf8` source objects that contain a block ("Internal logic error in compiler: ComStrmSetCursor"). | yes | no | no | Non-ASCII source is sent as a Unicode string instead of `Utf8`. |
+| `GciOopToFlt_` does not exist before 3.7. | missing | – | – | `ToDouble` falls back to `GciOopToFlt`. |
 
 Other differences from the manual, taken from the 3.7.5 headers:
 - `OopType` is 64 bits, not 32.

@@ -100,7 +100,7 @@ internal static unsafe partial class GciNative
 
     /// <summary>
     /// OopType GciNewUtf8String_(const char* unicodeCString, size_t nBytes, BoolType utf8OrUnicode);
-    /// utf8OrUnicode = false → instance of Utf8.
+    /// utf8OrUnicode = false → instance of Utf8; true → Unicode7/16/32 (smallest that fits).
     /// </summary>
     public static ulong GciNewUtf8String_(byte* unicodeCString, nuint nBytes, bool utf8OrUnicode)
     {
@@ -209,6 +209,17 @@ internal static unsafe partial class GciNative
         return ((delegate* unmanaged[Cdecl]<ulong, double*, int>)Fn(ref _GciOopToFlt_, "GciOopToFlt_"))(theObject, result) != 0;
     }
     private static nint _GciOopToFlt_;
+
+    /// <summary>double GciOopToFlt(OopType theObject); — errors via GciErr. Fallback for 3.6, which lacks GciOopToFlt_.</summary>
+    public static double GciOopToFlt(ulong theObject)
+    {
+        return ((delegate* unmanaged[Cdecl]<ulong, double>)Fn(ref _GciOopToFlt, "GciOopToFlt"))(theObject);
+    }
+    private static nint _GciOopToFlt;
+
+    /// <summary>GciOopToFlt_ exists from GemStone 3.7 on.</summary>
+    public static bool HasOopToFltWithStatus => _hasOopToFltWithStatus ??= GciLibrary.TryGetExport("GciOopToFlt_", out _);
+    private static bool? _hasOopToFltWithStatus;
 
     /// <summary>OopType GciFltToOop(double aReal); — SmallDouble or new Float; OOP_NIL on error.</summary>
     public static ulong GciFltToOop(double aReal)

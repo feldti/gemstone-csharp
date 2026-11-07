@@ -87,6 +87,20 @@ public sealed partial class GciSession
         lock (Sync)
         {
             Activate();
+            if (!GciNative.HasOopToFltWithStatus)
+            {
+                // GemStone 3.6 has no GciOopToFlt_; GciOopToFlt reports a non-float via GciErr.
+                var value = GciNative.GciOopToFlt(obj.Value);
+                try
+                {
+                    ThrowIfError();
+                }
+                catch (GciException e) when (!e.IsFatal)
+                {
+                    throw new InvalidCastException($"{obj} is not a Float: {e.Message}", e);
+                }
+                return value;
+            }
             double result;
             var ok = GciNative.GciOopToFlt_(obj.Value, &result);
             ThrowIfError();

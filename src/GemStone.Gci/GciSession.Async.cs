@@ -127,7 +127,7 @@ public sealed partial class GciSession
             Activate();
             Oop oop;
             fixed (byte* p = bytes)
-                oop = new Oop(GciNative.GciNewUtf8String_(p, (nuint)bytes.Length, utf8OrUnicode: false));
+                oop = new Oop(GciNative.GciNewUtf8String_(p, (nuint)bytes.Length, utf8OrUnicode: true)); // Unicode, see Execute
             ThrowIfError();
             return oop;
         }

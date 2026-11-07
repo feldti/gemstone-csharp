@@ -13,9 +13,11 @@ public class GciNativeExportTests
     [GciLibraryFact]
     public void AllEntryPointsAreExported()
     {
+        // Newer functions the wrapper checks for before use (GemStone 3.6 lacks them).
+        string[] optional = ["GciOopToFlt_"];
         var names = GciNative.EntryPointNames().ToList();
         Assert.True(names.Count >= 60, $"only {names.Count} entry points found");
-        var missing = names.Where(name => !GciLibrary.TryGetExport(name, out _)).ToList();
+        var missing = names.Except(optional).Where(name => !GciLibrary.TryGetExport(name, out _)).ToList();
         Assert.Empty(missing);
     }
 }

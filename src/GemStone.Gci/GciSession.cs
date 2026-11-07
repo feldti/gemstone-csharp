@@ -110,8 +110,9 @@ public sealed partial class GciSession : IDisposable
     /// <exception cref="GciException">The code raised an error.</exception>
     /// <remarks>
     /// <c>GciExecuteStr</c> compiles its C string as an 8-bit String, which would turn UTF-8
-    /// multi-byte sequences into garbage. Non-ASCII source is therefore sent as a Utf8 object
-    /// via <c>GciNewUtf8String_</c> + <c>GciExecute</c> (one extra round trip).
+    /// multi-byte sequences into garbage. Non-ASCII source is therefore sent as a Unicode string
+    /// via <c>GciNewUtf8String_</c> + <c>GciExecute</c> (one extra round trip); not as Utf8,
+    /// which the 3.6.5 compiler cannot handle once the source contains a block.
     /// </remarks>
     public unsafe Oop Execute(string source, Oop? symbolList = null)
     {
@@ -126,7 +127,9 @@ public sealed partial class GciSession : IDisposable
             var bytes = Encoding.UTF8.GetBytes(source);
             Oop sourceObj;
             fixed (byte* p = bytes)
-                sourceObj = new Oop(GciNative.GciNewUtf8String_(p, (nuint)bytes.Length, utf8OrUnicode: false));
+                // Unicode7/16/32, not Utf8: the 3.6.5 compiler fails on Utf8 sources that contain a block
+                // ("Internal logic error in compiler: ComStrmSetCursor"); Unicode sources work on 3.6 and 3.7.
+                sourceObj = new Oop(GciNative.GciNewUtf8String_(p, (nuint)bytes.Length, utf8OrUnicode: true));
             ThrowIfError();
             try
             {
