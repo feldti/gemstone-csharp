@@ -119,7 +119,7 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
   - Standard-Implementierungen in Interfaces, deshalb `IGsTwoWayConverter` als eigenes Interface;
   - Range-Zugriff auf Arrays (`arr[..n]` braucht `RuntimeHelpers.GetSubArray`), stattdessen `AsSpan(0, n).ToArray()`;
   - `nint` → `nuint`-Casts.
-- **Tests gegen den net48-Build:** Das Testprojekt bekommt `net48` nur unter Windows oder mit `-p:WithNet48Tests=true`, weil `dotnet test` net48 unter Linux nicht hosten kann. Unter Linux startet `tests/Net48Runner/run.sh` einen minimalen xUnit-Runner (Reflection: Fact/Theory, InlineData/MemberData, Klassen-Fixtures, async) mit Mono. Mono braucht dafür seine Facade-Assemblies (`System.Runtime.dll` …, Paket `mono-complete`); die Referenz-Facades aus `Microsoft.NETFramework.ReferenceAssemblies` lädt Mono nicht. Mono ist nicht das echte .NET Framework; der endgültige Test ist ein Windows-Rechner.
+- **Tests gegen den net48-Build:** Das Testprojekt bekommt `net48` nur unter Windows oder mit `-p:WithNet48Tests=true`, weil `dotnet test` net48 unter Linux nicht hosten kann. Unter Linux startet `tests/Net48Runner/run.sh` einen minimalen xUnit-Runner (Reflection: Fact/Theory, InlineData/MemberData, Klassen-Fixtures, async) mit Mono. Mono braucht dafür seine Facade-Assemblies (`System.Runtime.dll` …, Paket `mono-complete`); die Referenz-Facades aus `Microsoft.NETFramework.ReferenceAssemblies` lädt Mono nicht. Stand: alle 183 Tests grün unter Mono 6.8 gegen 3.6.5, 3.7.5 und 3.7.6. Mono ist aber nicht das echte .NET Framework; der endgültige Test ist ein Windows-Rechner.
 
 ## Verzeichnisstruktur
 

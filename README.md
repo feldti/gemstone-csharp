@@ -13,8 +13,8 @@ convert values, run transactions, read and write objects, and load object graphs
 >
 > What exists is covered by integration tests against GemStone 3.6.5, 3.7.2, 3.7.5 and 3.7.6 on Linux x86-64.
 > The Windows client support is implemented but has not been tested against a real Windows
-> client yet. The .NET Framework 4.8 build compiles, but has not been run on a real .NET
-> Framework installation yet.
+> client yet. The .NET Framework 4.8 build passes the same test suite under Mono on Linux, but
+> has not been run on a real .NET Framework installation on Windows yet.
 
 ## Features
 
@@ -161,6 +161,7 @@ rewritten as a whole, and nested collections (`List<List<T>>`) cannot be saved y
 ```bash
 dotnet build
 dotnet test                       # unit tests; integration tests are skipped without a stone
+tests/Net48Runner/run.sh          # the same tests against the net48 build, with Mono (Linux)
 ```
 
 To run the integration tests, point them at a stone. They create only temporary objects; the
