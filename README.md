@@ -235,7 +235,7 @@ These were found while building the wrapper. The wrapper works around all of the
 | The 3.6.5 compiler fails on `Utf8` source objects that contain a block ("Internal logic error in compiler: ComStrmSetCursor"). | yes | no | no | no | Non-ASCII source is sent as a Unicode string instead of `Utf8`. |
 | `GciOopToFlt_` does not exist before 3.7. | missing | – | – | – | `ToDouble` falls back to `GciOopToFlt`. |
 | `GciGetFreeOops` hands out at most 100,000 OOPs per call and silently leaves the rest of the result array 0. | yes | not tested | not tested | yes | `GetFreeOops` asks in chunks and checks for 0. |
-| Windows client only: `GciGetFreeOops(n)` with n > 2,000 and not a multiple of 2,000 fails with error 2166 ("lgcUncompress failed decompression would exceed size of destination buffer"). The Linux client library is not affected. | not tested | not tested | not tested | yes | `GetFreeOops` asks for whole blocks of 2,000 and keeps the rest for the next call. |
+| Windows client only: `GciGetFreeOops(n)` with n > 2,000 and not a multiple of 2,000 fails with error 2166 ("lgcUncompress failed decompression would exceed size of destination buffer"). The Linux client library is not affected. See [docs/bugreport-gcigetfreeoops.md](docs/bugreport-gcigetfreeoops.md). | not tested | not tested | not tested | yes | `GetFreeOops` asks for whole blocks of 2,000 and keeps the rest for the next call. |
 
 Other differences from the manual, taken from the 3.7.5 headers:
 - `OopType` is 64 bits, not 32.
