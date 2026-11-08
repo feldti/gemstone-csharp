@@ -1,8 +1,8 @@
 # GciGetFreeOops: error 2166 on the Windows client, and a silent limit of 100,000 OOPs per call
 
-**Product:** GemStone/S 64 Bit 3.7.6, Windows x64 client (`libgcirpc` for Windows, on Windows 11
-version 25H2, build 26200.9711) connected to a 3.7.6 stone on x86-64 Linux. The second issue was also seen with the 3.6.5 and 3.7.6
-Linux clients.
+**Product:** GemStone/S 64 Bit 3.7.6, Windows x64 client (`libgcirpc-3.7.6-64.dll`, on Windows 11
+version 25H2, build 26200.9711) connected to a 3.7.6 stone on x86-64 Linux. The second issue
+was also seen with the 3.6.5 and 3.7.6 Linux clients.
 **Component:** GemBuilder for C, `GciGetFreeOops` (RPC client `libgcirpc`)
 **Severity:**
 - Issue 1: the call fails and the session is unusable afterwards (protocol errors on later calls).
