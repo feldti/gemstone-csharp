@@ -1,4 +1,4 @@
-# GemStone.Gci
+# Gs64Net.Gci
 
 **Work in progress: not ready for production use. APIs may change.**
 

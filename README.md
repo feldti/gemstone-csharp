@@ -212,8 +212,13 @@ dotnet publish samples/GsRepl -c Release -r win-x64
 There is no published package yet. To build one locally:
 
 ```bash
-dotnet pack -c Release -o artifacts       # artifacts/GemStone.Gci.0.1.0-alpha.nupkg
+dotnet pack -c Release -o artifacts       # artifacts/Gs64Net.Gci.0.1.0-alpha.nupkg
 ```
+
+The package is called **`Gs64Net.Gci`**; the namespace in the code stays `GemStone.Gci`. (Package
+IDs starting with `Gemstone.` are reserved on nuget.org for the unrelated Gemstone libraries of
+the Grid Protection Alliance. Their namespace `Gemstone` differs in case from `GemStone`, so both
+can be used in the same C# project.)
 
 The package contains the net10.0, net8.0 and net48 builds with XML docs and embedded,
 Source Link enabled symbols, but **not** the GemStone client library. To use it, add the
