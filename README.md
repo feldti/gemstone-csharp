@@ -13,8 +13,8 @@ convert values, run transactions, read and write objects, and load object graphs
 >
 > What exists is covered by integration tests against GemStone 3.6.5, 3.7.2, 3.7.5 and 3.7.6 on Linux x86-64,
 > for .NET 10 and .NET 8, and on a Windows x64 client (GemStone 3.7.6 client against a Linux
-> stone) for .NET 10, .NET 8 and .NET Framework 4.8. Linux arm64 is supported by the code but
-> has not been tested yet; see [docs/platform-testing.md](docs/platform-testing.md).
+> stone) for .NET 10, .NET 8 and .NET Framework 4.8. Linux arm64 is supported with .NET 10 only
+> and has not been tested yet; see [docs/platform-testing.md](docs/platform-testing.md).
 
 ## Features
 
@@ -62,8 +62,9 @@ convert values, run transactions, read and write objects, and load object graphs
 - The GemStone/S 64 Bit 3.6.x or 3.7.x client library (`libgcirpc-3.x.y-64.so`, or `.dll` on Windows),
   usually taken from a GemStone installation (`$GEMSTONE`)
 - A running stone and NetLDI to connect to
-- 64-bit process only: Linux x86-64; Linux arm64 (GemStone 3.7 and later, e.g. a Raspberry Pi
-  with a 64-bit OS; GemTalk supports it for development only); Windows x64 as a client
+- 64-bit process only: Linux x86-64; Linux arm64 with **.NET 10 only** (GemStone 3.7 and later,
+  e.g. a Raspberry Pi with a 64-bit OS; GemTalk supports it for development only); Windows x64
+  as a client
 
 ## Finding the GCI library
 

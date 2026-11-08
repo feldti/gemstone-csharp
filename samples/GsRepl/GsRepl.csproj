@@ -18,7 +18,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- No GemStone.Gci.xml (IntelliSense docs) next to the published executable. -->
     <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
-    <!-- GemStone/S 64 Bit client libraries: 64-bit only; arm64 for Linux since 3.7. -->
+    <!-- GemStone/S 64 Bit client libraries: 64-bit only; arm64 for Linux since 3.7 (with .NET 10 only). -->
     <RuntimeIdentifiers>linux-x64;linux-arm64;win-x64</RuntimeIdentifiers>
   </PropertyGroup>
 

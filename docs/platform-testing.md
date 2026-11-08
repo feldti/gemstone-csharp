@@ -8,7 +8,7 @@ with the GemStone 3.7.6 Windows client against a stone on Linux (Windows 11 25H2
 The first run found a bug in the Windows client library (`GciGetFreeOops`, see the README).
 Not tested yet: the further checks below (gsrepl, running without `GEMSTONE`, WinForms, 32 bit).
 
-Linux arm64 is supported by the code but has not been tested yet.
+Linux arm64 is supported with .NET 10 only and has not been tested yet.
 
 ## Windows x64 (client)
 
@@ -76,6 +76,10 @@ GemTalk supports GemStone/S 64 Bit 3.7 on Linux arm64 for **development use only
 added preliminary support for the Raspberry Pi. Before 3.7, there are no arm64 client
 libraries.
 
+On arm64, this project supports **.NET 10 only**: .NET 10 is the first version that properly
+supports the Raspberry Pi. An application built for net8.0 stops at the first login with a
+`PlatformNotSupportedException`. arm64 on Windows is not supported either (no GemStone client).
+
 ### What you need
 
 | What | Notes |
@@ -83,9 +87,9 @@ libraries.
 | Raspberry Pi 4 or 5 (8 GB recommended for a stone; a client alone needs much less) | Pi 3 works as a pure client |
 | A **64-bit** OS: Raspberry Pi OS (64-bit) or Ubuntu Server arm64 | `uname -m` must print `aarch64`; a 32-bit OS cannot load the library |
 | GemStone/S 64 Bit 3.7.x for Linux arm64 | From GemTalk. Either a whole server on the Pi, or just its client library for a stone elsewhere, **same version as the stone** |
-| .NET 8 or .NET 10 SDK for arm64 | e.g. with `dotnet-install.sh` (https://dot.net/v1/dotnet-install.sh) |
+| .NET 10 SDK for arm64 | e.g. with `dotnet-install.sh` (https://dot.net/v1/dotnet-install.sh) |
 
-.NET Framework 4.8 (net48) is Windows-only; Mono on arm64 is not supported by this project.
+.NET 8 and .NET Framework 4.8 (net48, Windows-only) are not supported on arm64, nor is Mono.
 
 ### Running the tests
 
@@ -94,7 +98,7 @@ git clone https://github.com/feldti/gemstone-csharp.git && cd gemstone-csharp
 export GEMSTONE=/opt/gemstone/GemStone64Bit3.7.x-arm64.Linux     # the arm64 product directory
 export GS_TEST_STONE=gs64stone GS_TEST_GEM_SERVICE='!@localhost#netldi:gs64ldi!gemnetobject'
 export GS_TEST_USER=DataCurator GS_TEST_PASSWORD=swordfish
-dotnet test -f net8.0      # or net10.0, depending on the installed SDK/runtime
+dotnet test -f net10.0     # net8.0 is not supported on arm64
 ```
 
 Or without an SDK on the Pi: publish the console on another machine and copy it over:
