@@ -88,6 +88,9 @@ The `net48` build has the same API. Differences:
 
 ## Quick start
 
+How the pieces fit together (sessions, the object mapper, transactions, persistence by
+reachability) is described in [docs/programming-model.md](docs/programming-model.md).
+
 ```csharp
 using GemStone.Gci;
 
@@ -288,7 +291,7 @@ src/GemStone.Gci/           the library
 tests/GemStone.Gci.Tests/   unit tests and integration tests ([StoneFact])
 tests/GemStone.Gci.Generators.Tests/  unit tests of the source generator
 samples/GsRepl/             interactive console (separate solution)
-docs/                       bug reports and notes
+docs/                       programming model, platform testing, bug reports
 ```
 
 ## Not implemented yet
