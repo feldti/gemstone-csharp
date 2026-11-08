@@ -34,6 +34,30 @@ special object:
 - an index out of range returns `OOP_ILLEGAL`;
 - a named offset into a byte object returns `OOP_ILLEGAL`.
 
+### Standalone C program
+
+[`repro/gcifetchpaths.cc`](../repro/gcifetchpaths.cc) shows the crash with `libgcirpc` alone (build
+and run instructions are at the top of the file). Output against a 3.7.6 stone:
+
+```
+logged in, 3.7.6 build 2026-08-14T08:30:20-07:00 38a5ad8f99a6f6bca99454e290a490f558ef7f46
+1. single step, index out of range (expected: FALSE, OOP_ILLEGAL)
+  returned FALSE, result = 0x1 (OOP_ILLEGAL = 0x1), 0 s
+  session OK: 3 + 4 = 7
+2. single step to nil (expected: TRUE, OOP_NIL = 0x14)
+  returned TRUE, result = 0x14 (OOP_ILLEGAL = 0x1), 0 s
+  session OK: 3 + 4 = 7
+3. two steps, the second one from nil (expected: FALSE, OOP_ILLEGAL)
+  returned FALSE, result = 0x14 (OOP_ILLEGAL = 0x1), 74 s
+  GciFetchPaths: GemStone error 4137: Network error - text follows:
+linkgc socketReadError, socket read EOF
+  GciExecuteStr('3 + 4'): GemStone error 4100: The given session ID is invalid.
+  session is lost
+```
+
+The gem log of this run (`gemnetobject2218582stellaris.log`) shows the same stack trace as
+below.
+
 ## Expected result
 
 `GciFetchPaths` returns FALSE, `result` is `OOP_ILLEGAL`, and the session stays usable.
