@@ -9,10 +9,12 @@ namespace GemStone.Gci.Native;
 /// </summary>
 /// <remarks>
 /// Function pointers instead of <c>[LibraryImport]</c>/<c>[DllImport]</c>: the same code runs on
-/// .NET 10 and .NET Framework 4.8, and the versioned library file (<c>libgcirpc-3.7.5-64.dll</c>)
-/// is loaded by path on both (.NET Framework has no DllImport resolver). <c>BoolType</c> is a
-/// C <c>int</c>; all <c>const char[]</c> arguments are null-terminated UTF-8. x64 has a single
-/// calling convention, <c>Cdecl</c> is only spelled out for the compiler.
+/// .NET 10, .NET 8 and .NET Framework 4.8, and the versioned library file (<c>libgcirpc-3.7.5-64.dll</c>)
+/// is loaded by path on all of them (.NET Framework has no DllImport resolver). <c>BoolType</c> is a
+/// C <c>int</c>; all <c>const char[]</c> arguments are null-terminated UTF-8. x64 and arm64 each
+/// have a single calling convention for non-variadic functions (no GCI function used here is
+/// variadic), <c>Cdecl</c> is only spelled out for the compiler. The struct mirrors are the same
+/// on both (LP64, little-endian).
 /// </remarks>
 internal static unsafe partial class GciNative
 {

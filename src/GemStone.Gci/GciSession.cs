@@ -60,11 +60,12 @@ public sealed partial class GciSession : IDisposable
         lock (Sync)
         {
             if (_initialized) return;
-            // GemStone/S 64 Bit only ships 64-bit client libraries (also on Windows). Fail with a
-            // clear message instead of a BadImageFormatException from the loader.
+            // GemStone/S 64 Bit only ships 64-bit client libraries: x86-64 (Linux, Windows) and,
+            // since 3.7, arm64 (Linux, e.g. Raspberry Pi with a 64-bit OS; GemTalk: for
+            // development). Fail with a clear message instead of a BadImageFormatException.
             if (!Environment.Is64BitProcess)
                 throw new PlatformNotSupportedException(
-                    "GemStone/S 64 Bit client libraries require a 64-bit process (x64).");
+                    "GemStone/S 64 Bit client libraries require a 64-bit process (x64 or arm64).");
             if (!GciNative.GciInit())
                 throw new GciException("GciInit failed");
             _initialized = true;
@@ -74,6 +75,9 @@ public sealed partial class GciSession : IDisposable
     /// <summary>
     /// GciSetNet + GciLoginEx. Throws <see cref="GciException"/> on failure.
     /// </summary>
+    /// <param name="net">Stone name, NetLDI service (NRS) and host login.</param>
+    /// <param name="userName">GemStone user, e.g. <c>DataCurator</c>.</param>
+    /// <param name="password">GemStone password.</param>
     /// <param name="flags">Login flags; the default <see cref="GciLoginFlags.Quiet"/> suppresses
     /// the banner the GCI library would otherwise print to stdout.</param>
     /// <param name="haltOnErrNum">-1 keeps the GEM_HALT_ON_ERROR config setting, 0 never halts.</param>
@@ -145,7 +149,9 @@ public sealed partial class GciSession : IDisposable
     /// <summary>
     /// Sends <paramref name="selector"/> to <paramref name="receiver"/> via <c>GciPerform</c>.
     /// </summary>
+    /// <param name="receiver">The receiver of the message.</param>
     /// <param name="selector">Selector with keywords concatenated, e.g. <c>"at:put:"</c>.</param>
+    /// <param name="args">One argument per colon in the selector.</param>
     /// <exception cref="GciException">The message send raised an error.</exception>
     public unsafe Oop Perform(Oop receiver, string selector, params Oop[] args)
     {

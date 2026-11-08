@@ -4,7 +4,7 @@ namespace GemStone.Gci.Native;
 
 /// <summary>
 /// Loads the GCI library once (by path, from <see cref="GciLibraryResolver.Candidates"/>) and
-/// resolves its exports. .NET uses <see cref="NativeLibrary"/>; the net48 build uses
+/// resolves its exports. .NET uses <c>NativeLibrary</c>; the net48 build uses
 /// <c>LoadLibraryExW</c>/<c>GetProcAddress</c> on Windows (.NET Framework) and <c>dlopen</c>/<c>dlsym</c>
 /// elsewhere (Mono on Linux, used to run the test suite against the net48 build).
 /// </summary>

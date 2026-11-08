@@ -2,7 +2,7 @@
 
 **🚧 Work in progress: not ready for production use. 🚧**
 
-A .NET 10 and .NET Framework 4.8 wrapper for **GemStone/S 64 Bit 3.6 and 3.7**, built on the classic (non-thread-safe)
+A .NET 10, .NET 8 and .NET Framework 4.8 wrapper for **GemStone/S 64 Bit 3.6 and 3.7**, built on the classic (non-thread-safe)
 **GemBuilder for C** (GCI, `libgcirpc`). It lets C# programs log in to a stone, run Smalltalk,
 convert values, run transactions, read and write objects, and load object graphs into C# classes.
 
@@ -11,9 +11,9 @@ convert values, run transactions, read and write objects, and load object graphs
 > use. APIs may change without notice, there are no releases or NuGet packages yet, and some
 > parts are missing (see [Not implemented yet](#not-implemented-yet)).
 >
-> What exists is covered by integration tests against GemStone 3.6.5, 3.7.2, 3.7.5 and 3.7.6 on Linux x86-64.
-> The Windows client support is implemented but has not been tested against a real Windows
-> client yet. The .NET Framework 4.8 build passes the same test suite under Mono on Linux, but
+> What exists is covered by integration tests against GemStone 3.6.5, 3.7.2, 3.7.5 and 3.7.6 on Linux x86-64,
+> for .NET 10 and .NET 8. Windows x64 (client) and Linux arm64 are supported by the code but have
+> not been tested yet; see [docs/platform-testing.md](docs/platform-testing.md). The .NET Framework 4.8 build passes the same test suite under Mono on Linux, but
 > has not been run on a real .NET Framework installation on Windows yet.
 
 ## Features
@@ -57,12 +57,13 @@ convert values, run transactions, read and write objects, and load object graphs
 
 ## Requirements
 
-- .NET SDK 10.0 to build. The library targets **.NET 10** and **.NET Framework 4.8**; the
-  latter is for existing Windows applications (WinForms, WPF), which must run as **x64** processes.
+- .NET SDK 10.0 to build. The library targets **.NET 10**, **.NET 8** (LTS) and **.NET Framework 4.8**;
+  the latter is for existing Windows applications (WinForms, WPF), which must run as **x64** processes.
 - The GemStone/S 64 Bit 3.6.x or 3.7.x client library (`libgcirpc-3.x.y-64.so`, or `.dll` on Windows),
   usually taken from a GemStone installation (`$GEMSTONE`)
 - A running stone and NetLDI to connect to
-- 64-bit process only: Linux x86-64; Windows x64 as a client
+- 64-bit process only: Linux x86-64; Linux arm64 (GemStone 3.7 and later, e.g. a Raspberry Pi
+  with a 64-bit OS; GemTalk supports it for development only); Windows x64 as a client
 
 ## Finding the GCI library
 
@@ -169,9 +170,12 @@ The mapper uses reflection, so it is not trimming- or AOT-safe yet. Nested colle
 
 ```bash
 dotnet build
-dotnet test                       # unit tests; integration tests are skipped without a stone
+dotnet test                       # net10.0 and net8.0; integration tests are skipped without a stone
 tests/Net48Runner/run.sh          # the same tests against the net48 build, with Mono (Linux)
 ```
+
+`dotnet test` runs the target frameworks one after another (on Windows also net48), because
+they share the stone.
 
 To run the integration tests, point them at a stone. They create only temporary objects; the
 few keys they put into `UserGlobals` (`GemStoneGciTest_*`) are removed again, and the mapping
@@ -201,6 +205,21 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"
 dotnet publish samples/GsRepl -c Release -r linux-x64   # self-contained single file
 dotnet publish samples/GsRepl -c Release -r win-x64
 ```
+
+## NuGet package
+
+There is no published package yet. To build one locally:
+
+```bash
+dotnet pack -c Release -o artifacts       # artifacts/GemStone.Gci.0.1.0-alpha.nupkg
+```
+
+The package contains the net10.0, net8.0 and net48 builds with XML docs and embedded,
+Source Link enabled symbols, but **not** the GemStone client library. To use it, add the
+`artifacts` folder (or a network share) as a package source, in Visual Studio under
+*Tools → Options → NuGet Package Manager → Package Sources*, or with
+`dotnet nuget add source /path/to/artifacts --name gemstone-local`. The version comes from
+`VersionPrefix`/`VersionSuffix` in `Directory.Build.props`; override it with `-p:Version=0.2.0`.
 
 ## Known GemStone issues
 
@@ -241,8 +260,8 @@ docs/                       bug reports and notes
 - `GciContinue` after errors
 - User actions
 - Linked sessions (`libgcilnk`)
-- The thread-safe GCI (`GciTs*`); this wrapper deliberately uses the classic GCI
-- A NuGet package
+- The thread-safe GCI (`GciTs*`): planned as a separate package next to this one, which stays on the classic GCI
+- A published NuGet package (it can be built locally, see above)
 
 ## License
 

@@ -1,16 +1,38 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- .NET 10 plus .NET Framework 4.8 (Windows x64 clients, e.g. existing WinForms applications). -->
+    <!-- .NET 10 and .NET 8 (LTS), plus .NET Framework 4.8 (Windows x64 clients, e.g. existing WinForms applications). -->
     <TargetFramework></TargetFramework>
-    <TargetFrameworks>net10.0;net48</TargetFrameworks>
+    <TargetFrameworks>net10.0;net8.0;net48</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <!-- Required by the function pointers in GciNative and the fixed buffers in GciErrSType. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>GemStone.Gci</RootNamespace>
+    <!-- A library: "dotnet publish" on a solution (e.g. samples/GsRepl) publishes only the apps. -->
+    <IsPublishable>false</IsPublishable>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+  <!-- NuGet package (shared metadata in Directory.Build.props). The classic, non-thread-safe GCI;
+       a thread-safe variant (GciTs*) is planned as a separate package. -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>GemStone.Gci</PackageId>
+    <Title>GemStone/S 64 Bit client for .NET (classic GCI)</Title>
+    <Description>Work in progress. A .NET 10, .NET 8 and .NET Framework 4.8 wrapper for GemStone/S 64 Bit 3.6 and 3.7, built on the classic GemBuilder for C (libgcirpc): sessions, Smalltalk execution, value conversion, transactions, traversals, async calls and an attribute-based object mapper with change tracking. The GemStone client library is not included; it comes from a GemStone installation. 64-bit processes only: Linux x86-64 and arm64, Windows x64.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>First preview. APIs may still change.</PackageReleaseNotes>
+    <!-- XML docs for IntelliSense; not every public member has a comment yet. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Checks the package for API differences between the target frameworks and versions. -->
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="PACKAGE.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' != 'net48'">
     <!-- Linux and Windows clients; GemStone/S 64 Bit ships 64-bit client libraries only. -->
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>

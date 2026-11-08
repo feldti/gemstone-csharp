@@ -135,7 +135,7 @@ public sealed class GciTraversal
     /// <summary>Objects the traversal started from.</summary>
     public IReadOnlyList<Oop> Roots { get; }
 
-    /// <summary>Execution result for <see cref="GciSession.ExecuteTraverse"/> / <see cref="GciSession.PerformTraverse"/>.</summary>
+    /// <summary>Execution result for <see cref="GciSession.ExecuteTraverse"/> / <see cref="GciSession.PerformTraverse(Oop, string, int, Oop[], GciTraversalOptions?)"/>.</summary>
     public Oop? Result { get; }
 
     /// <summary>All reports in traversal order.</summary>
@@ -199,7 +199,7 @@ public sealed record GciTraversalOptions
 
     /// <summary>
     /// Keep the execution result of <see cref="GciSession.ExecuteTraverse"/> /
-    /// <see cref="GciSession.PerformTraverse"/> in the export set (release it yourself);
+    /// <see cref="GciSession.PerformTraverse(Oop, string, int, Oop[], GciTraversalOptions?)"/> in the export set (release it yourself);
     /// by default it is released after the traversal, like every other reported object.
     /// </summary>
     public bool KeepResult { get; init; }

@@ -14,8 +14,10 @@ public sealed partial class GciSession
     /// <summary>
     /// Traverses the graph below <paramref name="root"/> (GciTraverseObjs + GciMoreTraversal).
     /// </summary>
+    /// <param name="root">The object to start from.</param>
     /// <param name="level">1 = only the root, 2 = also its instance variables, …; 0 = unlimited
     /// (beware: may fetch large parts of the repository).</param>
+    /// <param name="options">Buffer size and other options; null = defaults.</param>
     public GciTraversal Traverse(Oop root, int level, GciTraversalOptions? options = null) =>
         Traverse([root], level, options);
 
@@ -48,7 +50,10 @@ public sealed partial class GciSession
     /// PureExportSet with no way to release it (verified via <c>System hiddenSetAsArray:</c>),
     /// so every call would leak an object in the gem. Costs one extra round trip.
     /// </remarks>
+    /// <param name="source">Smalltalk code; its result is traversed.</param>
     /// <param name="level">As for <see cref="Traverse(Oop, int, GciTraversalOptions?)"/>, relative to the result.</param>
+    /// <param name="options">Buffer size, KeepResult …; null = defaults.</param>
+    /// <param name="symbolList">Symbol list for compiling; null = the user's default.</param>
     public GciTraversal ExecuteTraverse(string source, int level, GciTraversalOptions? options = null, Oop? symbolList = null)
     {
         ArgumentNullException.ThrowIfNull(source);

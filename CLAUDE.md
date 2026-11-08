@@ -10,14 +10,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Befehle
 
 ```bash
-dotnet build                                   # Bibliothek (net10.0 + net48) + Tests (GemStone.Gci.slnx)
-dotnet test                                    # alle Tests (unter Linux nur net10.0)
+dotnet build                                   # Bibliothek (net10.0 + net8.0 + net48) + Tests (GemStone.Gci.slnx)
+dotnet test                                    # alle Tests für net10.0 und net8.0 (unter Windows auch net48), nacheinander
+dotnet test -f net8.0                          # nur ein Ziel
+dotnet pack -c Release -o artifacts            # NuGet-Paket artifacts/GemStone.Gci.<Version>.nupkg
 tests/Net48Runner/run.sh                       # dieselben Tests gegen den net48-Build mit Mono (braucht mono-complete)
 dotnet test --filter "FullyQualifiedName~GciErrSTypeLayoutTests"   # einzelne Testklasse
 
 # Samples sind eigenständig (eigene .slnx, nicht Teil von GemStone.Gci.slnx), daher separat bauen:
 dotnet build samples/GsRepl
 dotnet publish samples/GsRepl -c Release -r linux-x64      # Single-File, self-contained, getrimmt
+dotnet publish samples/GsRepl -c Release -r linux-arm64    # Raspberry Pi (64-Bit-OS), auch von hier aus
 dotnet publish samples/GsRepl -c Release -r win-x64        # gsrepl.exe, auch von Linux aus
 dotnet publish samples/GsRepl -c Release -r linux-x64 -p:GemStoneLibDir=$GEMSTONE/lib   # GemStone-Libs mitliefern
 ```
@@ -116,9 +119,21 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
 - Integrationstests laufen in der xUnit-Collection `"Stone"` ohne Parallelisierung, weil es nur eine GCI-Session pro Prozess gibt.
 - `OopType` ist in GemStone/S 64 Bit **64 Bit** (`ulong`). Das Handbuch (Kap. 6.3) schreibt fälschlich „32-bit“.
 
+## Ziele, Plattformen, NuGet
+
+- **Zielframeworks:** `net10.0`, `net8.0` (LTS) und `net48`. Der net8.0-Build braucht keine Sonderbehandlung; was es erst ab .NET 9/10 gibt, darf in der Bibliothek nicht vorkommen (der Build für net8.0 fällt sonst um). `IsAotCompatible` gilt für beide .NET-Ziele.
+- **Testlauf:** `TestTfmsInParallel=false` im Testprojekt. Sonst startet `dotnet test` net10.0 und net8.0 als parallele Prozesse gegen denselben Stone, und die Commits auf `UserGlobals` kollidieren (Write-Write-Konflikt in `ChangesBecomeVisibleToOtherSessionsOnlyAfterCommitAndAbort`). Stand: 219 Tests grün auf allen vier Stones, für net10.0 und net8.0.
+- **Plattformen:** Linux x86-64 (getestet), Windows x64 nur als Client (ungetestet), Linux arm64 (ungetestet; GemStone 3.7 aufwärts, laut GemTalk nur für die Entwicklung, Raspberry Pi ab 3.7.1 vorläufig). Der Code hat nichts x64-Spezifisches: LP64, little-endian, keine variadischen GCI-Funktionen. `EnsureInitialized` prüft nur auf einen 64-Bit-Prozess. Anleitung für Tests auf Windows und dem Pi: `docs/platform-testing.md`.
+- **NuGet:** Gemeinsame Paket-Metadaten (Autor, Lizenz, Repo, Version `VersionPrefix`/`VersionSuffix`, Source Link) stehen in `Directory.Build.props`. Dort ist `IsPackable=false` voreingestellt, Projekte schalten es selbst ein. `GemStone.Gci` ist das Paket für die **klassische** GCI. Die thread-sichere GCI (`GciTs*`) kommt später als **eigenes Paket** (eigenes Projekt, eigene `PackageId`, z. B. `GemStone.Gci.ThreadSafe`) und erbt dieselben Metadaten.
+  - Die Paket-README ist `src/GemStone.Gci/PACKAGE.md` (wird als `README.md` gepackt), nicht die Repo-README mit ihren relativen Links.
+  - Mit `GenerateDocumentationFile` (CS1591 abgeschaltet, aber unvollständige `<param>`-Listen und mehrdeutige `cref` sind Fehler) und `EnablePackageValidation`.
+  - Die GemStone-Client-Bibliothek ist nicht im Paket (Lizenz GemTalk, muss zur Server-Version passen).
+  - `IsPublishable=false` in der Bibliothek, sonst scheitert `dotnet publish` auf `samples/GsRepl` (NETSDK1129, mehrere Ziele).
+  - Geprüft mit einem frischen Projekt, das das Paket aus einem lokalen Ordner bezieht (net8.0 mit dotnet, net48 mit Mono). Für so einen Test einen eigenen `globalPackagesFolder` nehmen, sonst landet die Vorabversion im globalen Cache, und ein neu gebautes Paket mit gleicher Version wird ignoriert.
+
 ## .NET Framework 4.8 (net48)
 
-- **Ziele:** Die Bibliothek baut für `net10.0` und `net48` (`TargetFrameworks` im csproj; `TargetFramework` aus `Directory.Build.props` wird dort geleert). `net48` ist für bestehende WinForms-Anwendungen gedacht. Die müssen als **x64-Prozess** laufen, weil GemStone 3.7 nur 64-Bit-Client-DLLs liefert.
+- **Ziele:** Die Bibliothek baut für `net10.0`, `net8.0` und `net48` (`TargetFrameworks` im csproj; `TargetFramework` aus `Directory.Build.props` wird dort geleert). `net48` ist für bestehende WinForms-Anwendungen gedacht. Die müssen als **x64-Prozess** laufen, weil GemStone 3.7 nur 64-Bit-Client-DLLs liefert.
 - **Pakete nur für net48:** `System.Memory`, `Portable.System.DateTimeOnly` (öffentliche `DateOnly`/`TimeOnly`), `PolySharp` (Compiler-Attribute) und die Referenz `System.Numerics`.
 - **Ersatzfunktionen:** `src/GemStone.Gci/Polyfills/NetFrameworkPolyfills.cs` (nur `#if !NET`):
   - statische Erweiterungsmember aus C# 14 (`extension(ArgumentNullException) { ThrowIfNull … }`, `Environment.TickCount64`, `Encoding.Latin1`, `decimal.Scale` …), dazu klassische Erweiterungen (`TryDequeue`, `TryAdd`, `Chunk`);
