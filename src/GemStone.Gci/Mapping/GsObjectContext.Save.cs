@@ -132,6 +132,39 @@ public sealed partial class GsObjectContext : IDisposable
         _retained.UnionWith(fresh);
     }
 
+    // ---- Unsaved changes -------------------------------------------------------------------
+
+    /// <summary>
+    /// Throws if a load would refresh tracked instances that have unsaved changes (instances the
+    /// load reaches as the same C# type; a different type gets a new instance).
+    /// </summary>
+    private void ThrowIfUnsavedChanges(List<(Oop Oop, Type Type)> reached)
+    {
+        if (_entries.Count == 0) return;
+        List<object>? dirty = null;
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var (oop, type) in reached)
+            if (_identity.TryGetValue(oop, out var entity) && type.IsInstanceOfType(entity) && seen.Add(entity)
+                && _entries.TryGetValue(entity, out var entry) && HasChanges(entry))
+                (dirty ??= []).Add(entity);
+        if (dirty is not null) throw new GsUnsavedChangesException(dirty);
+    }
+
+    /// <summary>Whether SaveChanges would write anything for this object (the same comparison, without sending).</summary>
+    private bool HasChanges(EntityEntry entry)
+    {
+        var run = new SaveRun(this);
+        try
+        {
+            run.Update(entry);
+        }
+        catch (Exception e) when (e is NotSupportedException or GsMappingException)
+        {
+            return true; // a changed value that cannot even be written (e.g. a one-way converter)
+        }
+        return run.HasWork;
+    }
+
     // ---- Comparison ------------------------------------------------------------------------
 
     private static bool IsEntity(object o) => Attribute.IsDefined(o.GetType(), typeof(GsClassAttribute), inherit: false);
@@ -329,6 +362,9 @@ public sealed partial class GsObjectContext : IDisposable
         private readonly List<Action> _onSuccess = [];
 
         public int Stores { get; private set; }
+
+        /// <summary>Whether <see cref="Execute"/> would send a batch.</summary>
+        public bool HasWork => _ops.Count > 0;
 
         public void Update(EntityEntry entry) =>
             Update(new SaveTarget(entry.Entity, entry.Map, BatchValue.Of(entry.Oop), entry));

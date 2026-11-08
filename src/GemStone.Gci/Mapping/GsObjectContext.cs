@@ -26,6 +26,14 @@ public sealed record GsLoadOptions
     /// Turn off for pure reading.
     /// </summary>
     public bool TrackChanges { get; init; } = true;
+
+    /// <summary>
+    /// Loading an object this context already holds refreshes that C# instance. By default
+    /// <see cref="GsObjectContext.Load{T}(Oop, GsLoadOptions?)"/> refuses with a
+    /// <see cref="GsUnsavedChangesException"/> if such an instance has changes that were not saved
+    /// yet; set this to overwrite them with the server's state instead.
+    /// </summary>
+    public bool DiscardLocalChanges { get; init; }
 }
 
 /// <summary>Mapping errors: either the mapping does not fit the image, or a value does not fit its property.</summary>
@@ -41,6 +49,25 @@ public sealed class GsMappingException(string message, IReadOnlyList<string> pro
 }
 
 /// <summary>
+/// A load would overwrite changes that were not saved yet: it reaches objects the context already
+/// holds, and their C# instances differ from the state loaded or saved last. Nothing was changed.
+/// Call <see cref="GsObjectContext.SaveChanges"/> first, or load with
+/// <see cref="GsLoadOptions.DiscardLocalChanges"/> to throw the changes away.
+/// </summary>
+public sealed class GsUnsavedChangesException(IReadOnlyList<object> entities) : InvalidOperationException(Describe(entities))
+{
+    /// <summary>The C# objects with unsaved changes that the load would have refreshed.</summary>
+    public IReadOnlyList<object> Entities { get; } = entities;
+
+    private static string Describe(IReadOnlyList<object> entities)
+    {
+        var names = string.Join(", ", entities.Take(5).Select(e => e.GetType().Name));
+        return $"The load would overwrite unsaved changes of {entities.Count} object(s) ({names}{(entities.Count > 5 ? ", …" : "")}). " +
+               "Call SaveChanges first, or load with GsLoadOptions.DiscardLocalChanges.";
+    }
+}
+
+/// <summary>
 /// Loads GemStone object graphs into C# objects mapped with <see cref="GsClassAttribute"/> and
 /// <see cref="GsInstVarAttribute"/>, tracks changes and writes them back with <see cref="SaveChanges"/>.
 /// </summary>
@@ -53,7 +80,8 @@ public sealed class GsMappingException(string message, IReadOnlyList<string> pro
 /// <para>
 /// The context keeps an identity map: within a context every GemStone object becomes exactly one
 /// C# object (shared references and cycles are preserved); loading it again refreshes that
-/// instance (and discards unsaved local changes). Mapping metadata is validated against the image
+/// instance. If the instance has unsaved changes, the load throws a <see cref="GsUnsavedChangesException"/>
+/// before changing anything (unless <see cref="GsLoadOptions.DiscardLocalChanges"/>). Mapping metadata is validated against the image
 /// on first use of a type. Tracked objects are kept in the export set until <see cref="Dispose"/>
 /// or <see cref="Clear"/>. Not thread-safe.
 /// </para>
@@ -392,6 +420,7 @@ public sealed partial class GsObjectContext
                     {
                         case GsShapeKind.Mapped:
                             var map = ActualMap(oop, report, s.Map!, where);
+                            _reached.Add((oop, map.Type));
                             foreach (var p in map.Properties)
                                 queue.Enqueue((NamedValue(report, p, where), p.Shape, p.Path));
                             break;
@@ -503,8 +532,13 @@ public sealed partial class GsObjectContext
 
         // ---- Phase 2: build the C# objects ----
 
+        /// <summary>Mapped objects the load reaches, with the C# type they are loaded as.</summary>
+        private readonly List<(Oop Oop, Type Type)> _reached = [];
+
         public object? Build(Oop root, GsShape shape, string where)
         {
+            // Before anything changes: refreshing an instance must not silently drop unsaved changes.
+            if (!options.DiscardLocalChanges) ctx.ThrowIfUnsavedChanges(_reached);
             if (_toConvert.Count > 0)
             {
                 Oop[] pending = [.. _toConvert];

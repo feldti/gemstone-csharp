@@ -82,6 +82,64 @@ public class GsSaveChangesIntegrationTests(MappingFixture fixture) : IClassFixtu
     private string Print(string expr) => Eval<string>($"{expr} printString");
 
     [StoneFact]
+    public void ReloadDoesNotSilentlyDropUnsavedChanges()
+    {
+        var key = NewAccount();
+        var acc = $"UserGlobals at: #{key}";
+        using var ctx = NewContext();
+        var a = ctx.Load<Account>(acc);
+        Assert.Same(a, ctx.Load<Account>(acc)); // unchanged: reloading is fine
+
+        a.Balance = 1m;
+        var e = Assert.Throws<GsUnsavedChangesException>(() => ctx.Load<Account>(acc));
+        Assert.Same(a, Assert.Single(e.Entities));
+        Assert.Equal(1m, a.Balance); // nothing was overwritten
+
+        // Also through a collection, and for an object only reached below the root.
+        a.Balance = 10.50m;
+        a.Orders[0].Lines!["kiwi"] = 2;
+        e = Assert.Throws<GsUnsavedChangesException>(() => ctx.Load<Account>(acc));
+        Assert.Same(a.Orders[0], Assert.Single(e.Entities));
+
+        // Saved changes are no obstacle; the reload keeps the instances.
+        Assert.Equal(1, ctx.SaveChanges());
+        var order = a.Orders[0];
+        Assert.Same(a, ctx.Load<Account>(acc));
+        Assert.Same(order, a.Orders[0]);
+        Assert.Equal(2, order.Lines!["kiwi"]);
+    }
+
+    [StoneFact]
+    public void DiscardLocalChangesOverwritesThem()
+    {
+        var key = NewAccount();
+        var acc = $"UserGlobals at: #{key}";
+        using var ctx = NewContext();
+        var a = ctx.Load<Account>(acc);
+        a.Name = "local";
+        a.Tags.Add("local");
+
+        Assert.Same(a, ctx.Load<Account>(acc, new GsLoadOptions { DiscardLocalChanges = true }));
+        Assert.Equal("Dora", a.Name);
+        Assert.DoesNotContain("local", a.Tags);
+        Assert.Equal(0, ctx.SaveChanges()); // the snapshot is the server's state again
+    }
+
+    [StoneFact]
+    public void UnsavedChangesElsewhereDoNotBlockALoad()
+    {
+        var first = NewAccount();
+        var second = NewAccount();
+        using var ctx = NewContext();
+        var a = ctx.Load<Account>($"UserGlobals at: #{first}");
+        a.Name = "changed";
+        var b = ctx.Load<Account>($"UserGlobals at: #{second}"); // does not reach a
+        Assert.NotSame(a, b);
+        Assert.Equal("changed", a.Name);
+        Assert.Equal(1, ctx.SaveChanges());
+    }
+
+    [StoneFact]
     public void NestedCollectionsArePatchedInPlace()
     {
         var n = NewNested();

@@ -83,6 +83,24 @@ What happens:
 - **The commit is separate:** `SaveChanges` writes into the session's transaction. Only
   `Commit` (or `RunInTransaction`) makes it permanent.
 
+## Loading the same object twice
+
+A context has an identity map: each GemStone object becomes exactly one C# object.
+
+- **Twice in one `Load`** (two customers share an address, or a cycle such as
+  `account → orders → account`): one instance, filled once; both places refer to it.
+- **Again in a later `Load` of the same context:** you get the same instance back, refreshed
+  with the server's state. Inside a transaction, that state is the transaction's snapshot plus
+  your own session's changes; commits of other sessions appear only after `Commit` or `Abort`.
+- **Unsaved changes are protected:** if the load would refresh an instance with changes that
+  `SaveChanges` has not written yet, it throws a `GsUnsavedChangesException` (with the
+  affected objects in `Entities`) before it changes anything. Save first, or load with
+  `new GsLoadOptions { DiscardLocalChanges = true }` to throw the changes away on purpose.
+  Objects the load does not reach are not affected. Properties with `[GsReadOnly]` and objects
+  loaded with `TrackChanges = false` have no snapshot and are simply refreshed.
+- **Another context** has its own identity map: the same GemStone object becomes a separate C#
+  object there, with its own change tracking.
+
 ## What is different from an ORM
 
 1. **Persistence by reachability:** there is no insert into a table. A new object is stored

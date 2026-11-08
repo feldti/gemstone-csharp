@@ -152,6 +152,9 @@ How `SaveChanges` works:
 - **Writing is batched too:** all changes go to the server in one batch, about six GCI calls,
   however many objects changed. Saving 2,700 changes and 300 new objects took 10 GCI calls
   instead of 7,509. The context only takes on the new state if the batch succeeds.
+- **Loading again** returns the same C# instances, refreshed. If that would overwrite changes
+  not saved yet, `Load` throws a `GsUnsavedChangesException` instead (or overwrites them with
+  `GsLoadOptions { DiscardLocalChanges = true }`).
 - **What it doesn't do:** it doesn't commit. If a save fails, the server may already hold part
   of the changes: abort, `Clear()` the context and reload.
 
