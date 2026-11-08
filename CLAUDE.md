@@ -37,16 +37,19 @@ export GS_TEST_STONE=gs64stone GS_TEST_GEM_SERVICE='!@localhost#netldi:gs64ldi!g
 export GS_TEST_USER=DataCurator GS_TEST_PASSWORD=swordfish
 dotnet test
 
-# zweiter Stone mit 3.7.6: odatadev (Repository /datadisk/pas/work), NetLDI-Port 46019
-# GEMSTONE=/datadisk/pas/work/products/GemStone64Bit3.7.6-x86_64.Linux GS_TEST_STONE=odatadev GS_TEST_GEM_SERVICE='!@localhost#netldi:46019!gemnetobject'
+# Test-Stones je Version (Zielversionen: 3.6.5, 3.6.8, 3.7.2, 3.7.5, 3.7.6), alle lokal, Gastmodus, NetLDI-Port:
+#   test365  3.6.5  37497     test372  3.7.2  32847     test375  3.7.5  36281     test376  3.7.6  39857
+#   test368  3.6.8  40925  (noch offen: Key-File abgelaufen, wird erneuert)
+# GEMSTONE=/datadisk/pas/work/products/GemStone64Bit<version>-x86_64.Linux, GS_TEST_GEM_SERVICE='!@localhost#netldi:<port>!gemnetobject'
+for s in test365:3.6.5:37497 test372:3.7.2:32847 test375:3.7.5:36281 test376:3.7.6:39857; do
+  IFS=: read GS_TEST_STONE v p <<<"$s"; export GS_TEST_STONE
+  GEMSTONE=/datadisk/pas/work/products/GemStone64Bit$v-x86_64.Linux GS_TEST_GEM_SERVICE="!@localhost#netldi:$p!gemnetobject" dotnet test
+done
 # Die GCI-Header (gci.hf, gci.ht, gcicmn.ht, gcioop.ht, gcioc.ht) sind in 3.7.5 und 3.7.6 identisch.
 
-# dritter Stone mit 3.6.5: test365 (GsDevKit_stones-Registry work, /datadisk/pas/registry/gsdevkit_stones/stones/work/test365.ston), NetLDI test365_ldi, Port 37497
-# GEMSTONE=/datadisk/pas/work/products/GemStone64Bit3.6.5-x86_64.Linux GS_TEST_STONE=test365 GS_TEST_GEM_SERVICE='!@localhost#netldi:37497!gemnetobject'
-
-# vierter Stone mit 3.7.2: es2025 (Registry election, NetLDI es2025_ldi, Port 37441). Wirkt wie eine echte Datenbank:
-# keine Absturz-Proben (GciFetchPaths) dort; die Suite selbst committet nur temporäre GemStoneGciTest_*-Schlüssel und räumt sie weg.
-# GEMSTONE=/datadisk/pas/election/products/GemStone64Bit3.7.2-x86_64.Linux GS_TEST_STONE=es2025 GS_TEST_GEM_SERVICE='!@localhost#netldi:37441!gemnetobject'
+# weitere Stones: odatadev (3.7.6, Repository /datadisk/pas/work, NetLDI-Port 46019, Gem-Logs in /datadisk/pas/work/stones/odatadev/logs)
+# es2025 (3.7.2, Registry election, Port 37441, GEMSTONE=/datadisk/pas/election/products/…): wirkt wie eine echte Datenbank,
+#   keine Absturz-Proben (GciFetchPaths) dort; für Tests test372 nehmen.
 
 # interaktive Konsole (eigene Variablen GS_STONE, GS_GEM_SERVICE, GS_USER, GS_PASSWORD bzw. --Optionen)
 GS_GEM_SERVICE="$GS_TEST_GEM_SERVICE" GS_PASSWORD=swordfish dotnet run --project samples/GsRepl
@@ -124,7 +127,7 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
 ## Ziele, Plattformen, NuGet
 
 - **Zielframeworks:** `net10.0`, `net8.0` (LTS) und `net48`. Der net8.0-Build braucht keine Sonderbehandlung; was es erst ab .NET 9/10 gibt, darf in der Bibliothek nicht vorkommen (der Build für net8.0 fällt sonst um). `IsAotCompatible` gilt für beide .NET-Ziele.
-- **Testlauf:** `TestTfmsInParallel=false` im Testprojekt. Sonst startet `dotnet test` net10.0 und net8.0 als parallele Prozesse gegen denselben Stone, und die Commits auf `UserGlobals` kollidieren (Write-Write-Konflikt in `ChangesBecomeVisibleToOtherSessionsOnlyAfterCommitAndAbort`). Stand: 219 Tests grün auf allen vier Stones, für net10.0 und net8.0.
+- **Testlauf:** `TestTfmsInParallel=false` im Testprojekt. Sonst startet `dotnet test` net10.0 und net8.0 als parallele Prozesse gegen denselben Stone, und die Commits auf `UserGlobals` kollidieren (Write-Write-Konflikt in `ChangesBecomeVisibleToOtherSessionsOnlyAfterCommitAndAbort`). Stand: 233 Tests grün auf 3.6.5, 3.7.2, 3.7.5 und 3.7.6 (test365, test372, test375, test376, dazu odatadev und es2025), für net10.0 und net8.0; 3.6.8 steht noch aus.
 - **Plattformen:** Linux x86-64 (getestet), Windows x64 nur als Client (getestet: alle Tests grün für net10.0, net8.0 und net48 nativ, Windows-Client 3.7.6 gegen odatadev auf Linux; noch offen: gsrepl, Betrieb ohne `GEMSTONE`, WinForms, 32-Bit-Fall), Linux arm64 (**nur .NET 10**, Wunsch des Nutzers: der Raspberry Pi wird erst mit .NET 10 richtig unterstützt; `CheckArm64` wirft im net8.0-/net48-Build und unter Windows arm64 eine `PlatformNotSupportedException`; ungetestet; GemStone 3.7 aufwärts, laut GemTalk nur für die Entwicklung, Raspberry Pi ab 3.7.1 vorläufig). Der Code hat nichts x64-Spezifisches: LP64, little-endian, keine variadischen GCI-Funktionen. `EnsureInitialized` prüft auf einen 64-Bit-Prozess und ruft `CheckArm64` auf. Anleitung für Tests auf Windows und dem Pi: `docs/platform-testing.md`.
 - **NuGet:** Gemeinsame Paket-Metadaten (Autor, Lizenz, Repo, Version `VersionPrefix`/`VersionSuffix`, Source Link) stehen in `Directory.Build.props`. Dort ist `IsPackable=false` voreingestellt, Projekte schalten es selbst ein. `GemStone.Gci` ist das Paket für die **klassische** GCI. Die thread-sichere GCI (`GciTs*`) kommt später als **eigenes Paket** (eigenes Projekt, eigene `PackageId`, z. B. `GemStone.Gci.ThreadSafe`) und erbt dieselben Metadaten.
   - Die Paket-README ist `src/GemStone.Gci/PACKAGE.md` (wird als `README.md` gepackt), nicht die Repo-README mit ihren relativen Links.
