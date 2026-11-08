@@ -126,6 +126,53 @@ ctx.Load<Customer>(c.Oop);                          // load again to see the ser
 
 `Send` converts arguments and the result like `Evaluate`; `Perform` works on plain OOPs.
 
+## Notifications from the server
+
+The server cannot interrupt a client. A `GciSignalListener` asks instead, on a session of its
+own, and receives two kinds of notifications:
+
+- **Changed objects:** you watch committed objects; when another session commits a change to
+  one of them, the listener reports it (GemStone's notify set).
+- **Signals between sessions:** any session (C# or Smalltalk code on the server) can send a
+  number and a text to the listener's session.
+
+```csharp
+using var listenerSession = GciSession.Login(net, "DataCurator", "swordfish"); // only for the listener
+using var listener = new GciSignalListener(listenerSession);
+
+ctx.TryGetOop(customer, out var oop);
+listener.Watch(oop);                                 // committed objects only
+listener.SignalsReceived += (_, e) =>                // on the UI thread if Start was called there
+{
+    foreach (var changed in e.Signals.ChangedObjects)
+        if (ctx.TryGetEntity(changed, out var entity)) MarkStale(entity);
+    foreach (var m in e.Signals.Messages)
+        Console.WriteLine($"session {m.SenderSerial} sent {m.Value}: {m.Message}");
+};
+listener.Start(TimeSpan.FromSeconds(1));             // or call listener.Poll() yourself
+
+// elsewhere, in another session or program:
+otherSession.SendSignal(listener.SessionId, 42, "price list updated");
+```
+
+In Smalltalk the same signal is `System sendSignal: 42 to: listenerSessionId withMessage: '…'`.
+
+Things to know:
+- **Use a session that does nothing else.** With signals enabled, any Smalltalk the session
+  runs can fail with GemStone error 6008 or 6010 when a signal arrives. The listener handles
+  that (and so loses no signal); other code would not.
+- **A notification is a hint, not the data.** To see the change, the session that works with
+  the objects aborts (or commits) and loads them again. Unsaved local changes are protected:
+  that load throws a `GsUnsavedChangesException` instead of overwriting them.
+- **Each poll costs one round trip** and aborts the listener session, so it never holds an old
+  view of the repository. A poll interval of a second or so is plenty for most applications.
+- **Signal texts are byte Strings on the server:** only characters up to U+00FF (Latin-1).
+  `SendSignal` rejects anything else with an `ArgumentException`.
+- **Signals are not stored permanently.** They live in the receiving session until read, and
+  disappear with it. For events that must not get lost (for example while no listener is
+  running), let the senders commit entries to a persistent queue, such as an `RcQueue`, and
+  use the signal only as a prompt to look.
+
 ## Threads and several sessions
 
 - The classic GCI exists once per process, but **several sessions** are possible. Their calls

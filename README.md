@@ -50,6 +50,10 @@ convert values, run transactions, read and write objects, and load object graphs
 - **Traversals:** load a whole object graph in one round trip (`Traverse`, `ExecuteTraverse`,
   `PerformTraverse`) and decode it offline. `FetchPaths` reads instance-variable paths from many
   objects at once.
+- **Notifications:** `GciSignalListener` reports changes other sessions commit to watched objects
+  and signals sent with `SendSignal` (or `System sendSignal:to:withMessage:`), by polling on a
+  session of its own, optionally in the background with an event. See
+  [docs/programming-model.md](docs/programming-model.md#notifications-from-the-server).
 - **Object mapping:** load GemStone objects into your own C# classes, mapped with attributes,
   and write changes back with `SaveChanges`. Instance-variable names may differ from property
   names. Shared references, cycles, subclasses and collections are handled, and mapping errors

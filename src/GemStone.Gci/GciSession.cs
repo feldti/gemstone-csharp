@@ -295,6 +295,22 @@ public sealed partial class GciSession : IDisposable
     {
         var error = LastError();
         if (error is null) return;
+        Throw(error);
+    }
+
+    /// <summary>Cleans up after <paramref name="error"/> (see <see cref="DiscardError"/>) and throws it.</summary>
+    private void Throw(GciException error)
+    {
+        DiscardError(error);
+        throw error;
+    }
+
+    /// <summary>
+    /// After an error: marks the session as lost if fatal; otherwise clears the suspended stack and
+    /// releases the error's OOPs.
+    /// </summary>
+    private void DiscardError(GciException error)
+    {
         if (error.IsFatal)
         {
             _loggedIn = false; // connection is gone; GciLogout would be invalid
@@ -306,7 +322,6 @@ public sealed partial class GciSession : IDisposable
                 GciNative.GciClearStack(error.Context); // we never resume (GciContinue), so drop the suspended GsProcess
             ReleaseErrorOops(error);
         }
-        throw error;
     }
 
     /// <summary>

@@ -163,6 +163,12 @@ public sealed partial class GsObjectContext
     public bool TryGetOop(object entity, out Oop oop) => _oops.TryGetValue(entity, out oop);
 
     /// <summary>
+    /// The C# object this context holds for <paramref name="oop"/>, e.g. for the objects a
+    /// <see cref="GciSignalListener"/> reports as changed.
+    /// </summary>
+    public bool TryGetEntity(Oop oop, [NotNullWhen(true)] out object? entity) => _identity.TryGetValue(oop, out entity);
+
+    /// <summary>
     /// Forgets all loaded objects (identity map and tracked state) and releases their OOPs;
     /// mapping metadata stays cached. Use after an abort before reloading.
     /// </summary>
