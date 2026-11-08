@@ -148,4 +148,33 @@ public class GciStoreIntegrationTests
         Assert.DoesNotContain(default(Oop), ids); // GciGetFreeOops alone leaves everything above 100,000 at 0
         Assert.Equal(ids.Length, ids.Distinct().Count());
     }
+
+    [StoneFact]
+    public void FreeOopsInCountsThatAreNotWholeBlocks()
+    {
+        // The Windows client fails on GciGetFreeOops(n) with n > 2000 and n % 2000 != 0 (error 2166);
+        // GetFreeOops asks for whole blocks and keeps the rest for the next call.
+        using var s = StoneEnv.Login();
+        var all = new List<Oop>();
+        foreach (var n in new[] { 1, 1_999, 2_000, 2_001, 4_001, 3_601, 7, 50_001 })
+        {
+            var ids = s.GetFreeOops(n);
+            Assert.Equal(n, ids.Length);
+            Assert.DoesNotContain(default(Oop), ids);
+            all.AddRange(ids);
+        }
+        Assert.Equal(all.Count, all.Distinct().Count()); // never handed out twice
+
+        var before = s.CallCount;
+        s.GetFreeOops(5); // served from the rest of the last block
+        Assert.Equal(0, s.CallCount - before);
+
+        // They are real, usable OOPs.
+        var some = s.GetFreeOops(3);
+        var result = s.StoreAndExecute([GciNewObject.Pointers(some[0], KnownClasses.Array, [some[1], some[2]]),
+            GciNewObject.ByteObject(some[1], KnownClasses.String, "a"u8.ToArray()), GciNewObject.ByteObject(some[2], KnownClasses.String, "b"u8.ToArray())],
+            "self first , self last", some[0]);
+        Assert.Equal("ab", s.ToValue(result));
+        s.Release([result, .. some]);
+    }
 }

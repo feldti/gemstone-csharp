@@ -56,7 +56,23 @@ public sealed partial class GciSession
     /// </summary>
     internal const int MaxFreeOopsPerCall = 100_000;
 
-    /// <summary>Allocates OOPs for objects that a store traversal creates (GciGetFreeOops, in chunks).</summary>
+    /// <summary>
+    /// The Windows client library (verified with 3.7.6) fetches free OOPs in blocks of this size
+    /// and fails on a partial last block: GciGetFreeOops(4001) raises error 2166 "lgcUncompress
+    /// failed decompression would exceed size of destination buffer, destSize 8 &lt; uncomprSize
+    /// 16000". Counts up to one block and whole multiples work. The Linux library has no such
+    /// problem (also over the network).
+    /// </summary>
+    internal const int FreeOopBlock = 2_000;
+
+    /// <summary>Free OOPs fetched but not handed out yet (they stay allocated to the session until logout).</summary>
+    private readonly Stack<Oop> _freeOopPool = new();
+
+    /// <summary>
+    /// Allocates OOPs for objects that a store traversal creates (GciGetFreeOops). Counts above
+    /// <see cref="FreeOopBlock"/> are rounded up to whole blocks; the extra OOPs are kept for the
+    /// next call. At most <see cref="MaxFreeOopsPerCall"/> per call.
+    /// </summary>
     internal unsafe Oop[] GetFreeOops(int count)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(count);
@@ -64,19 +80,29 @@ public sealed partial class GciSession
         if (count == 0) return oops;
         lock (Sync)
         {
-            fixed (Oop* p = oops)
+            var have = 0;
+            while (have < count && _freeOopPool.Count > 0) oops[have++] = _freeOopPool.Pop();
+            var need = count - have;
+            if (need > 0)
             {
-                for (var done = 0; done < count; done += MaxFreeOopsPerCall)
+                var request = need <= FreeOopBlock ? need : (need + FreeOopBlock - 1) / FreeOopBlock * FreeOopBlock;
+                var fetched = new Oop[request];
+                fixed (Oop* p = fetched)
                 {
-                    var chunk = Math.Min(MaxFreeOopsPerCall, count - done);
-                    Activate();
-                    GciNative.GciGetFreeOops(chunk, (ulong*)(p + done));
-                    ThrowIfError();
+                    for (var done = 0; done < request; done += MaxFreeOopsPerCall) // MaxFreeOopsPerCall is a whole number of blocks
+                    {
+                        var chunk = Math.Min(MaxFreeOopsPerCall, request - done);
+                        Activate();
+                        GciNative.GciGetFreeOops(chunk, (ulong*)(p + done));
+                        ThrowIfError();
+                    }
                 }
+                if (Array.IndexOf(fetched, default(Oop)) is var missing and >= 0)
+                    throw new GciException($"GciGetFreeOops returned no OOP for index {missing} of {request}.");
+                Array.Copy(fetched, 0, oops, have, need);
+                for (var i = request - 1; i >= need; i--) _freeOopPool.Push(fetched[i]);
             }
         }
-        if (Array.IndexOf(oops, default(Oop)) is var missing and >= 0)
-            throw new GciException($"GciGetFreeOops returned no OOP for index {missing} of {count}.");
         return oops;
     }
 
