@@ -1,6 +1,6 @@
 # GciFetchPaths crashes the gem (SIGSEGV) when a path step starts from nil or another special object
 
-**Product:** GemStone/S 64 Bit 3.6.5, 3.7.5 and 3.7.6 (x86-64 Linux)
+**Product:** GemStone/S 64 Bit 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6 (x86-64 Linux)
 **Component:** GemBuilder for C, `GciFetchPaths` (RPC client `libgcirpc`, gem side `GemDoFetchPaths`)
 **Severity:** gem process crashes; the client session is lost
 
@@ -110,7 +110,7 @@ the manual describes.
 | | |
 |---|---|
 | Server/gem | 3.7.6, build 2026-08-14T08:30:20-07:00, commit 38a5ad8f99a6f6bca99454e290a490f558ef7f46 |
-| Also reproduced on | 3.7.5, build 2026-03-11T15:07:11-07:00, commit cf61017e7c0c8b8afb92c5ee1df55ca9363bf651; 3.6.5 (`om::FetchSize_c (obj=0x14)` at om.c:4869) |
+| Also reproduced on | 3.7.5, build 2026-03-11T15:07:11-07:00, commit cf61017e7c0c8b8afb92c5ee1df55ca9363bf651; 3.6.5 (`om::FetchSize_c (obj=0x14)` at om.c:4869); 3.6.8, build 2024-01-25T11:34:47-08:00, commit b86a6485c22ec7306d199d268845101bbe40f425 (om.c:4875); 3.7.2, build 2024-12-17T10:36:35-08:00, commit b01090c78195bf9fdff5f0ba518227ed7e5bb3fa |
 | Client | `libgcirpc-3.7.6-64.so` / `libgcirpc-3.7.5-64.so` (classic, non-thread-safe GCI), same host, via NetLDI |
 | OS | TUXEDO OS 24.04.5 LTS (Ubuntu 24.04 based), Linux 7.0.0, x86-64, AMD Ryzen 7 7840HS |
 

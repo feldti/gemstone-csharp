@@ -52,7 +52,7 @@ public sealed partial class GciSession
 
     /// <summary>
     /// GciGetFreeOops hands out at most this many OOPs per call; the rest of the result array is
-    /// silently left 0 (verified with 3.6.5 and 3.7.6; not in the manual or the header).
+    /// silently left 0 (verified with 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6; not in the manual or the header).
     /// </summary>
     internal const int MaxFreeOopsPerCall = 100_000;
 

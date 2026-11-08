@@ -2,7 +2,7 @@
 
 **Product:** GemStone/S 64 Bit 3.7.6, Windows x64 client (`libgcirpc-3.7.6-64.dll`, on Windows 11
 version 25H2, build 26200.9711) connected to a 3.7.6 stone on x86-64 Linux. The second issue
-was also seen with the 3.6.5 and 3.7.6 Linux clients.
+was also seen with the 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6 Linux clients.
 **Component:** GemBuilder for C, `GciGetFreeOops` (RPC client `libgcirpc`)
 **Severity:**
 - Issue 1: the call fails and the session is unusable afterwards (protocol errors on later calls).
@@ -85,7 +85,7 @@ next call. Free OOPs stay allocated to the session until logout, so this is safe
 
 ### Steps to reproduce
 
-Linux client, 3.6.5 and 3.7.6 (loopback and LAN):
+Linux client, 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6 (loopback; 3.6.5 and 3.7.6 also over the LAN):
 
 ```c
 static OopType oops[150000];

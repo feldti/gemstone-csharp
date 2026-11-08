@@ -11,7 +11,7 @@ convert values, run transactions, read and write objects, and load object graphs
 > use. APIs may change without notice, there are no releases or NuGet packages yet, and some
 > parts are missing (see [Not implemented yet](#not-implemented-yet)).
 >
-> What exists is covered by integration tests against GemStone 3.6.5, 3.7.2, 3.7.5 and 3.7.6 on Linux x86-64,
+> What exists is covered by integration tests against GemStone 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6 on Linux x86-64,
 > for .NET 10 and .NET 8, and on a Windows x64 client (GemStone 3.7.6 client against a Linux
 > stone) for .NET 10, .NET 8 and .NET Framework 4.8. Linux arm64 is supported with .NET 10 only
 > and has not been tested yet; see [docs/platform-testing.md](docs/platform-testing.md).
@@ -226,17 +226,16 @@ Source Link enabled symbols, but **not** the GemStone client library. To use it,
 
 These were found while building the wrapper. The wrapper works around all of them.
 
-| Issue | 3.6.5 | 3.7.2 | 3.7.5 | 3.7.6 | Workaround in the wrapper |
-|---|---|---|---|---|---|
-| `GciFetchPaths` crashes the gem (SIGSEGV in `checkFetchPathOffset`) when a path step starts from `nil` or another special object, as in `address.street` with `address == nil`. The session is lost. | yes | not tested | yes | yes | `FetchPaths` resolves one step per round trip and never steps from a special object. See [docs/bugreport-gcifetchpaths.md](docs/bugreport-gcifetchpaths.md). |
-| `GciExecuteStrTrav` leaves the source String in the PureExportSet on every call. | yes | yes | yes | fixed | `ExecuteTraverse` uses `Execute` + `Traverse`. |
-| `GciResolveSymbol` leaves a String with the name in the PureExportSet on every call. | yes | yes | yes | fixed | `ResolveSymbol` uses `GciResolveSymbolObj` with its own String, which it releases. |
-| `DateAndTime printString` fails ("unexpected format") when the NetLDI runs with a German `LC_NUMERIC`. | – | – | yes | – | Not a wrapper issue: start the NetLDI with `LC_NUMERIC=C`. The wrapper never parses locale-dependent `printString` output. |
-
-| The 3.6.5 compiler fails on `Utf8` source objects that contain a block ("Internal logic error in compiler: ComStrmSetCursor"). | yes | no | no | no | Non-ASCII source is sent as a Unicode string instead of `Utf8`. |
-| `GciOopToFlt_` does not exist before 3.7. | missing | – | – | – | `ToDouble` falls back to `GciOopToFlt`. |
-| `GciGetFreeOops` hands out at most 100,000 OOPs per call and silently leaves the rest of the result array 0. | yes | not tested | not tested | yes | `GetFreeOops` asks in chunks and checks for 0. |
-| Windows client only: `GciGetFreeOops(n)` with n > 2,000 and not a multiple of 2,000 fails with error 2166 ("lgcUncompress failed decompression would exceed size of destination buffer"). The Linux client library is not affected. See [docs/bugreport-gcigetfreeoops.md](docs/bugreport-gcigetfreeoops.md). | not tested | not tested | not tested | yes | `GetFreeOops` asks for whole blocks of 2,000 and keeps the rest for the next call. |
+| Issue | 3.6.5 | 3.6.8 | 3.7.2 | 3.7.5 | 3.7.6 | Workaround in the wrapper |
+|---|---|---|---|---|---|---|
+| `GciFetchPaths` crashes the gem (SIGSEGV in `checkFetchPathOffset`) when a path step starts from `nil` or another special object, as in `address.street` with `address == nil`. The session is lost. | yes | yes | yes | yes | yes | `FetchPaths` resolves one step per round trip and never steps from a special object. See [docs/bugreport-gcifetchpaths.md](docs/bugreport-gcifetchpaths.md) and the C program [repro/gcifetchpaths.cc](repro/gcifetchpaths.cc). |
+| `GciExecuteStrTrav` leaves the source String in the PureExportSet on every call. | yes | yes | yes | yes | fixed | `ExecuteTraverse` uses `Execute` + `Traverse`. |
+| `GciResolveSymbol` leaves a String with the name in the PureExportSet on every call. | yes | yes | yes | yes | fixed | `ResolveSymbol` uses `GciResolveSymbolObj` with its own String, which it releases. |
+| `DateAndTime printString` fails ("unexpected format") when the NetLDI runs with a German `LC_NUMERIC`. | – | – | – | yes | – | Not a wrapper issue: start the NetLDI with `LC_NUMERIC=C`. The wrapper never parses locale-dependent `printString` output. |
+| The compiler fails on `Utf8` source objects that contain a block ("Internal logic error in compiler: ComStrmSetCursor"). | yes | yes | yes | fixed | fixed | Non-ASCII source is sent as a Unicode string instead of `Utf8`. |
+| `GciOopToFlt_` does not exist before 3.7. | missing | missing | – | – | – | `ToDouble` falls back to `GciOopToFlt`. |
+| `GciGetFreeOops` hands out at most 100,000 OOPs per call and silently leaves the rest of the result array 0. | yes | yes | yes | yes | yes | `GetFreeOops` asks in chunks and checks for 0. |
+| Windows client only: `GciGetFreeOops(n)` with n > 2,000 and not a multiple of 2,000 fails with error 2166 ("lgcUncompress failed decompression would exceed size of destination buffer"). The Linux client library is not affected. See [docs/bugreport-gcigetfreeoops.md](docs/bugreport-gcigetfreeoops.md). | not tested | not tested | not tested | not tested | yes | `GetFreeOops` asks for whole blocks of 2,000 and keeps the rest for the next call. |
 
 Other differences from the manual, taken from the 3.7.5 headers:
 - `OopType` is 64 bits, not 32.

@@ -1,6 +1,6 @@
 # Testing on Windows and on Linux arm64 (Raspberry Pi)
 
-The test suite runs on Linux x86-64 against GemStone 3.6.5, 3.7.2, 3.7.5 and 3.7.6, for
+The test suite runs on Linux x86-64 against GemStone 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6, for
 .NET 10, .NET 8 and (with Mono) .NET Framework 4.8.
 
 Windows x64 as a client: all tests pass for .NET 10, .NET 8 and .NET Framework 4.8 (native),

@@ -8,6 +8,8 @@
  *       -I$GEMSTONE/include -c gcifetchpaths.cc -o gcifetchpaths.o
  *   g++ gcifetchpaths.o $GEMSTONE/lib/gcirtlobj.o -m64 -Wl,-Bdynamic,--no-as-needed -lpthread \
  *       -Wl,--as-needed -ldl -lc -lm -lrt -z noexecstack -Wl,-z,lazy -o gcifetchpaths
+ * With the 3.6.x headers and glibc 2.38 or later, add -fpermissive (gcistring.hf redeclares
+ * strlcpy/strlcat as static).
  * At run time, GciRtlLoad loads libgcirpc from $GEMSTONE/lib; use the product directory that
  * matches the stone's version.
  *
