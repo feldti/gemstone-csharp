@@ -12,9 +12,9 @@ convert values, run transactions, read and write objects, and load object graphs
 > parts are missing (see [Not implemented yet](#not-implemented-yet)).
 >
 > What exists is covered by integration tests against GemStone 3.6.5, 3.7.2, 3.7.5 and 3.7.6 on Linux x86-64,
-> for .NET 10 and .NET 8. Windows x64 (client) and Linux arm64 are supported by the code but have
-> not been tested yet; see [docs/platform-testing.md](docs/platform-testing.md). The .NET Framework 4.8 build passes the same test suite under Mono on Linux, but
-> has not been run on a real .NET Framework installation on Windows yet.
+> for .NET 10 and .NET 8, and on a Windows x64 client (GemStone 3.7.6 client against a Linux
+> stone) for .NET 10, .NET 8 and .NET Framework 4.8. Linux arm64 is supported by the code but
+> has not been tested yet; see [docs/platform-testing.md](docs/platform-testing.md).
 
 ## Features
 
