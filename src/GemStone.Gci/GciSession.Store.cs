@@ -50,7 +50,13 @@ public sealed partial class GciSession
 {
     private const int GciStoreTravCreate = 0x2; // GCI_STORE_TRAV_CREATE (gci.ht)
 
-    /// <summary>Allocates OOPs for objects that a store traversal creates (GciGetFreeOops).</summary>
+    /// <summary>
+    /// GciGetFreeOops hands out at most this many OOPs per call; the rest of the result array is
+    /// silently left 0 (verified with 3.6.5 and 3.7.6; not in the manual or the header).
+    /// </summary>
+    internal const int MaxFreeOopsPerCall = 100_000;
+
+    /// <summary>Allocates OOPs for objects that a store traversal creates (GciGetFreeOops, in chunks).</summary>
     internal unsafe Oop[] GetFreeOops(int count)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(count);
@@ -60,11 +66,17 @@ public sealed partial class GciSession
         {
             fixed (Oop* p = oops)
             {
-                Activate();
-                GciNative.GciGetFreeOops(count, (ulong*)p);
-                ThrowIfError();
+                for (var done = 0; done < count; done += MaxFreeOopsPerCall)
+                {
+                    var chunk = Math.Min(MaxFreeOopsPerCall, count - done);
+                    Activate();
+                    GciNative.GciGetFreeOops(chunk, (ulong*)(p + done));
+                    ThrowIfError();
+                }
             }
         }
+        if (Array.IndexOf(oops, default(Oop)) is var missing and >= 0)
+            throw new GciException($"GciGetFreeOops returned no OOP for index {missing} of {count}.");
         return oops;
     }
 

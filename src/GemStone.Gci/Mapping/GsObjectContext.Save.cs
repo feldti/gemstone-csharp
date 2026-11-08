@@ -93,9 +93,21 @@ public sealed partial class GsObjectContext : IDisposable
     }
 
     /// <summary>Releases the OOPs held by this context (the objects stay usable on the server if referenced).</summary>
+    /// <remarks>
+    /// Does not throw: if the session is broken (e.g. after a fatal error), the OOPs cannot be
+    /// released any more, and an exception here would hide the error that broke the session
+    /// (for example in a <c>using</c> block).
+    /// </remarks>
     public void Dispose()
     {
-        ReleaseRetained();
+        try
+        {
+            ReleaseRetained();
+        }
+        catch (GciException)
+        {
+            _retained.Clear(); // the session is unusable; the gem drops its export set at logout
+        }
         _entries.Clear();
         _identity.Clear();
         _oops.Clear();
