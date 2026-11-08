@@ -135,6 +135,8 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
 
 - **Ziele:** Die Bibliothek baut für `net10.0`, `net8.0` und `net48` (`TargetFrameworks` im csproj; `TargetFramework` aus `Directory.Build.props` wird dort geleert). `net48` ist für bestehende WinForms-Anwendungen gedacht. Die müssen als **x64-Prozess** laufen, weil GemStone 3.7 nur 64-Bit-Client-DLLs liefert.
 - **Pakete nur für net48:** `System.Memory`, `Portable.System.DateTimeOnly` (öffentliche `DateOnly`/`TimeOnly`), `PolySharp` (Compiler-Attribute) und die Referenz `System.Numerics`.
+  - `System.Memory` immer auf der **neuesten** Version halten (zurzeit 4.6.3, Assembly-Version 4.0.5.0). .NET Framework bindet strong-named Assemblies exakt. Der net48-Testhost des Windows-SDK 10 verlangt `System.Memory` 4.0.5.0; mit 4.6.0 (4.0.2.0) brach `dotnet test` unter Windows mit `FileLoadException` (0x80131040) ab, bevor ein Test lief. Mono ignoriert solche Versionsunterschiede, unter Linux fällt das also nicht auf.
+  - Das Testprojekt erzeugt für net48 Binding-Redirects (`AutoGenerateBindingRedirects` + `GenerateBindingRedirectsOutputType`, weil es eine Bibliothek ist). Solange alle Verweise dieselbe Version nennen, entsteht keine `.dll.config`.
 - **Ersatzfunktionen:** `src/GemStone.Gci/Polyfills/NetFrameworkPolyfills.cs` (nur `#if !NET`):
   - statische Erweiterungsmember aus C# 14 (`extension(ArgumentNullException) { ThrowIfNull … }`, `Environment.TickCount64`, `Encoding.Latin1`, `decimal.Scale` …), dazu klassische Erweiterungen (`TryDequeue`, `TryAdd`, `Chunk`);
   - `ReferenceEqualityComparer`, `NativeMemory` und `Ascii` als interne Typen;

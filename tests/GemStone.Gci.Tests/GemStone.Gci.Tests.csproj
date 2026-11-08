@@ -35,6 +35,16 @@
     </PackageReference>
   </ItemGroup>
 
+  <!--
+    .NET Framework binds strong-named assemblies by exact version. The net48 testhost of the
+    .NET SDK expects newer System.Memory & co. than some packages reference; a test project is a
+    library, so binding redirects (GemStone.Gci.Tests.dll.config) must be requested explicitly.
+  -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <Reference Include="System.Numerics" />
     <PackageReference Include="xunit.runner.console" Version="2.9.3" PrivateAssets="all" />
