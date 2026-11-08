@@ -164,8 +164,13 @@ added or replaced change (`removeIndex:` / `add:beforeIndex:` for ordered collec
 touch stay the same objects. Elements that were added on the server after loading, for example
 by Smalltalk code, are kept.
 
-The mapper uses reflection, so it is not trimming- or AOT-safe yet. Nested collections
-(`List<List<T>>`) cannot be saved yet.
+Collections can be nested (`List<List<T>>`, `Dictionary<string, List<T>>`, `T[][]` …). An inner
+collection keeps its GemStone object as long as the program keeps the same C# instance, even
+when it moves within the outer collection; its contents are updated in place as above. A new C#
+instance becomes a new GemStone collection (OrderedCollection, Array, Set or KeyValueDictionary,
+by its C# type).
+
+The mapper uses reflection, so it is not trimming- or AOT-safe yet.
 
 ## Building and testing
 

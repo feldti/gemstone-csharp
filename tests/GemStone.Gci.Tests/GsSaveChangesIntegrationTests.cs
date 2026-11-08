@@ -11,6 +11,14 @@ public sealed class AccountWithReadOnlyName
     [GsInstVar("amount")] public decimal Balance { get; set; }
 }
 
+[GsClass("GsMapTestNested")]
+public sealed class NestedCollections
+{
+    [GsInstVar("rows")] public List<List<long>>? Rows { get; set; }
+    [GsInstVar("groups"), GsCollection(GsCollectionKind.Dictionary)] public Dictionary<string, List<string>>? Groups { get; set; }
+    [GsInstVar("grid")] public long[][]? Grid { get; set; }
+}
+
 /// <summary>
 /// SaveChanges against the classes of <see cref="MappingFixture"/> (own session, never committed).
 /// Every test works on fresh objects stored under its own key in UserGlobals.
@@ -43,6 +51,106 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     }
 
     private T Eval<T>(string source) => S.Evaluate<T>(source);
+
+    /// <summary>A fresh GsMapTestNested under a new key; returns the expression that answers it.</summary>
+    private string NewNested()
+    {
+        var key = "GsSaveTest_" + Guid.NewGuid().ToString("N");
+        S.Execute($$"""
+            | n |
+            n := (UserGlobals at: #GsMapTestNested) new.
+            n instVarNamed: 'rows' put: (OrderedCollection with: (OrderedCollection with: 1 with: 2) with: (OrderedCollection with: 3));
+              instVarNamed: 'groups' put: (KeyValueDictionary new at: 'a' put: (OrderedCollection with: 'x'); yourself);
+              instVarNamed: 'grid' put: (Array with: #(1 2) copy with: #(3 4) copy).
+            UserGlobals at: #{{key}} put: n.
+            true
+            """);
+        return $"(UserGlobals at: #{key})";
+    }
+
+    private string Print(string expr) => Eval<string>($"{expr} printString");
+
+    [StoneFact]
+    public void NestedCollectionsArePatchedInPlace()
+    {
+        var n = NewNested();
+        using var ctx = new GsObjectContext(S);
+        var obj = ctx.Load<NestedCollections>(n);
+        Assert.Equal([[1, 2], [3]], obj.Rows!);
+        Assert.Equal(["x"], obj.Groups!["a"]);
+        Assert.Equal([3, 4], obj.Grid![1]);
+        var row1 = Eval<long>($"({n} instVarNamed: 'rows') first asOop");
+        var groupA = Eval<long>($"(({n} instVarNamed: 'groups') at: 'a') asOop");
+        var grid2 = Eval<long>($"({n} instVarNamed: 'grid') last asOop");
+        Assert.Equal(0, ctx.SaveChanges());
+
+        obj.Rows![0].Add(9);
+        obj.Groups!["a"].Add("y");
+        obj.Grid![1][0] = 30;
+        Assert.Equal(3, ctx.SaveChanges()); // three inner collections, the outer ones are unchanged
+        Assert.Equal(0, ctx.SaveChanges());
+
+        Assert.Equal("anOrderedCollection( anOrderedCollection( 1, 2, 9), anOrderedCollection( 3))", Print($"({n} instVarNamed: 'rows')"));
+        Assert.Equal("anOrderedCollection( 'x', 'y')", Print($"(({n} instVarNamed: 'groups') at: 'a')"));
+        Assert.Equal("anArray( anArray( 1, 2), anArray( 30, 4))", Print($"({n} instVarNamed: 'grid')"));
+        // Changed in place: still the same GemStone collections.
+        Assert.Equal(row1, Eval<long>($"({n} instVarNamed: 'rows') first asOop"));
+        Assert.Equal(groupA, Eval<long>($"(({n} instVarNamed: 'groups') at: 'a') asOop"));
+        Assert.Equal(grid2, Eval<long>($"({n} instVarNamed: 'grid') last asOop"));
+    }
+
+    [StoneFact]
+    public void NewAndMovedInnerCollections()
+    {
+        var n = NewNested();
+        using var ctx = new GsObjectContext(S);
+        var obj = ctx.Load<NestedCollections>(n);
+        var row2 = Eval<long>($"({n} instVarNamed: 'rows') last asOop");
+
+        var first = obj.Rows![0];
+        obj.Rows.RemoveAt(0);       // the second row moves to the front
+        obj.Rows.Add([7, 8]);       // a new row
+        obj.Groups!["b"] = ["z"];   // a new group
+        obj.Grid = [[5], []];       // a new outer array with new inner arrays
+        Assert.True(ctx.SaveChanges() > 0);
+        Assert.Equal(0, ctx.SaveChanges());
+
+        Assert.Equal("anOrderedCollection( anOrderedCollection( 3), anOrderedCollection( 7, 8))", Print($"({n} instVarNamed: 'rows')"));
+        Assert.Equal(row2, Eval<long>($"({n} instVarNamed: 'rows') first asOop")); // moved, not copied
+        Assert.Equal("anOrderedCollection( 'z')", Print($"(({n} instVarNamed: 'groups') at: 'b')"));
+        Assert.Equal("anArray( anArray( 5), anArray( ))", Print($"({n} instVarNamed: 'grid')"));
+
+        // The new inner collections are tracked as well; the removed one is not written any more.
+        first.Add(100);
+        obj.Rows[1].Add(9);
+        obj.Groups["b"].Add("zz");
+        obj.Grid[1] = [6];
+        Assert.Equal(3, ctx.SaveChanges()); // rows[2], groups['b'] and grid itself
+        Assert.Equal("anOrderedCollection( anOrderedCollection( 3), anOrderedCollection( 7, 8, 9))", Print($"({n} instVarNamed: 'rows')"));
+        Assert.Equal("anOrderedCollection( 'z', 'zz')", Print($"(({n} instVarNamed: 'groups') at: 'b')"));
+        Assert.Equal("anArray( anArray( 5), anArray( 6))", Print($"({n} instVarNamed: 'grid')"));
+
+        using var fresh = new GsObjectContext(S);
+        var again = fresh.Load<NestedCollections>(n);
+        Assert.Equal([[3], [7, 8, 9]], again.Rows!);
+        Assert.Equal(["z", "zz"], again.Groups!["b"]);
+    }
+
+    [StoneFact]
+    public void NewObjectWithNestedCollections()
+    {
+        using var ctx = new GsObjectContext(S);
+        var obj = new NestedCollections { Rows = [[1], [2, 3]], Groups = new() { ["k"] = ["v", "w"] }, Grid = [[1, 2]] };
+        var oop = ctx.Add(obj);
+        var n = $"(Object _objectForOop: {oop.Value})";
+        Assert.Equal("anOrderedCollection( anOrderedCollection( 1), anOrderedCollection( 2, 3))", Print($"({n} instVarNamed: 'rows')"));
+        Assert.Equal("anOrderedCollection( 'v', 'w')", Print($"(({n} instVarNamed: 'groups') at: 'k')"));
+        Assert.Equal("anArray( anArray( 1, 2))", Print($"({n} instVarNamed: 'grid')"));
+
+        obj.Rows[1].Remove(2);
+        Assert.Equal(1, ctx.SaveChanges());
+        Assert.Equal("anOrderedCollection( 3)", Print($"({n} instVarNamed: 'rows') last"));
+    }
 
     [StoneFact]
     public void UnchangedObjectsWriteNothing()

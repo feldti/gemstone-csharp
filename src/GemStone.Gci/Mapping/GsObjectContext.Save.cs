@@ -7,8 +7,11 @@ using GemStone.Gci.Native;
 
 namespace GemStone.Gci.Mapping;
 
-/// <summary>Snapshot of one collection element (or dictionary key/value) as loaded or last saved.</summary>
-internal sealed record SnapElement(Oop Oop, object? Value, bool IsSymbol);
+/// <summary>
+/// Snapshot of one collection element (or dictionary key/value) as loaded or last saved;
+/// <paramref name="Nested"/> for an element that is a collection itself.
+/// </summary>
+internal sealed record SnapElement(Oop Oop, object? Value, bool IsSymbol, CollectionSnapshot? Nested = null);
 
 /// <summary>Snapshot of a collection-valued property: the GemStone collection and its contents.</summary>
 internal sealed class CollectionSnapshot(Oop oop, List<SnapElement> elements)
@@ -409,35 +412,16 @@ public sealed partial class GsObjectContext : IDisposable
                 return;
             }
 
-            var items = Items(current);
             if (old is not null)
             {
-                if (!ContentsEqual(items, old.Elements, p.Shape.Kind))
-                {
-                    var collOop = BatchValue.Of(old.Oop);
-                    var elements = p.Shape.Kind switch
-                    {
-                        GsShapeKind.Dictionary => PatchDictionary(collOop, p.Shape, items, old.Elements, p.Path),
-                        GsShapeKind.Set => PatchUnordered(collOop, p.Shape, items, old.Elements, p.Path),
-                        _ => PatchOrdered(collOop, p.Shape, items, old.Elements, p.Path),
-                    };
-                    Stores++;
-                    remember(p, () =>
-                    {
-                        old.Elements = elements();
-                        return new PropertySnapshot { Oop = old.Oop, Value = current, Collection = old };
-                    });
-                }
-                else
-                {
-                    remember(p, () => new PropertySnapshot { Oop = old.Oop, Value = current, Collection = old });
-                }
+                PatchContents(old, current, p.Shape, p.Path);
+                remember(p, () => new PropertySnapshot { Oop = old.Oop, Value = current, Collection = old });
                 return;
             }
 
             // Was nil (or a new object): create the GemStone collection.
-            var coll = Create(ctx.Kernel(CollectionClassName(p)));
-            var created = ReplaceContents(coll, p.Shape, items, [], p.Path);
+            var coll = Create(ctx.Kernel(CollectionClassName(p.CollectionKind, p.Shape)));
+            var created = ReplaceContents(coll, p.Shape, Items(current), [], p.Path);
             Store(target, p, coll);
             remember(p, () => new PropertySnapshot
             {
@@ -445,7 +429,41 @@ public sealed partial class GsObjectContext : IDisposable
             });
         }
 
-        private static string CollectionClassName(GsPropertyMap p) => p.CollectionKind switch
+        /// <summary>
+        /// Changes a loaded collection in place if its contents differ from the snapshot, then does
+        /// the same for the collections inside it (they are compared by reference one level up).
+        /// </summary>
+        private void PatchContents(CollectionSnapshot old, object current, GsShape shape, string where)
+        {
+            if (!_patched.Add(old)) return; // the same collection reachable twice
+            var items = Items(current);
+            var before = old.Elements;
+            if (!ContentsEqual(items, before, shape.Kind))
+            {
+                var collOop = BatchValue.Of(old.Oop);
+                var elements = shape.Kind switch
+                {
+                    GsShapeKind.Dictionary => PatchDictionary(collOop, shape, items, before, where),
+                    GsShapeKind.Set => PatchUnordered(collOop, shape, items, before, where),
+                    _ => PatchOrdered(collOop, shape, items, before, where),
+                };
+                Stores++;
+                _onSuccess.Add(() => old.Elements = elements());
+            }
+
+            var isDict = shape.Kind == GsShapeKind.Dictionary;
+            for (var i = 0; i < items.Count; i++)
+            {
+                var elementShape = isDict ? (i % 2 == 0 ? shape.Key! : shape.Value!) : shape.Element!;
+                if (!elementShape.IsCollection || items[i] is not { } inner) continue;
+                if (before.FirstOrDefault(e => e.Nested is not null && ReferenceEquals(e.Value, inner)) is { } same)
+                    PatchContents(same.Nested!, inner, elementShape, $"element of {where}");
+            }
+        }
+
+        private readonly HashSet<CollectionSnapshot> _patched = new(ReferenceEqualityComparer.Instance);
+
+        private static string CollectionClassName(GsCollectionKind? kind, GsShape shape) => kind switch
         {
             GsCollectionKind.Array => "Array",
             GsCollectionKind.Ordered => "OrderedCollection",
@@ -454,7 +472,7 @@ public sealed partial class GsObjectContext : IDisposable
             GsCollectionKind.Bag => "Bag",
             GsCollectionKind.IdentityBag => "IdentityBag",
             GsCollectionKind.Dictionary => "KeyValueDictionary",
-            _ => p.Shape.Kind switch
+            _ => shape.Kind switch
             {
                 GsShapeKind.Array => "Array",
                 GsShapeKind.Set => "Set",
@@ -467,18 +485,15 @@ public sealed partial class GsObjectContext : IDisposable
         private Func<List<SnapElement>> ReplaceContents(BatchValue coll, GsShape shape, List<object?> items, List<SnapElement> old, string where)
         {
             var isDict = shape.Kind == GsShapeKind.Dictionary;
-            var values = new List<BatchValue>(items.Count);
-            var symbols = new List<bool>(items.Count);
+            var planned = new List<Planned>(items.Count);
             for (var i = 0; i < items.Count; i++)
             {
                 var elementShape = isDict ? (i % 2 == 0 ? shape.Key! : shape.Value!) : shape.Element!;
                 var sameRole = isDict ? old.Where((_, j) => j % 2 == i % 2).ToList() : old;
-                var (value, isSymbol) = Element(items[i], elementShape, sameRole, where);
-                values.Add(value);
-                symbols.Add(isSymbol);
+                planned.Add(Element(items[i], elementShape, sameRole, where));
             }
-            _ops.Add(new ReplaceOp(coll, values));
-            return () => [.. values.Select((v, i) => new SnapElement(v.Resolved, items[i], symbols[i]))];
+            _ops.Add(new ReplaceOp(coll, [.. planned.Select(e => e.Value)]));
+            return () => [.. planned.Select((e, i) => e.Snap(items[i]))];
         }
 
         /// <summary>
@@ -500,7 +515,7 @@ public sealed partial class GsObjectContext : IDisposable
             return () =>
             [
                 .. old.Take(head),
-                .. inserted.Select((e, i) => new SnapElement(e.Value.Resolved, middle[i], e.IsSymbol)),
+                .. inserted.Select((e, i) => e.Snap(middle[i])),
                 .. old.Skip(old.Count - tail),
             ];
         }
@@ -521,9 +536,9 @@ public sealed partial class GsObjectContext : IDisposable
                     snapshot.Add(() => kept);
                     continue;
                 }
-                var (value, isSymbol) = Element(item, shape.Element!, old, where);
-                inserted.Add(value);
-                snapshot.Add(() => new SnapElement(value.Resolved, item, isSymbol));
+                var planned = Element(item, shape.Element!, old, where);
+                inserted.Add(planned.Value);
+                snapshot.Add(() => planned.Snap(item));
             }
             _ops.Add(new PatchOp(coll, 0, [.. unmatched.Select(e => BatchValue.Of(e.Oop))], inserted));
             return () => [.. snapshot.Select(f => f())];
@@ -553,34 +568,49 @@ public sealed partial class GsObjectContext : IDisposable
                         snapshot.Add(() => oldValue);
                         continue;
                     }
-                    var (v, vSym) = Element(value, shape.Value!, oldValues, where);
+                    var v = Element(value, shape.Value!, oldValues, where);
                     puts.Add(BatchValue.Of(oldKey.Oop));
-                    puts.Add(v);
+                    puts.Add(v.Value);
                     snapshot.Add(() => oldKey);
-                    snapshot.Add(() => new SnapElement(v.Resolved, value, vSym));
+                    snapshot.Add(() => v.Snap(value));
                     continue;
                 }
-                var (newKey, kSym) = Element(key, shape.Key!, oldKeys, where);
-                var (newValue, nSym) = Element(value, shape.Value!, oldValues, where);
-                puts.Add(newKey);
-                puts.Add(newValue);
-                snapshot.Add(() => new SnapElement(newKey.Resolved, key, kSym));
-                snapshot.Add(() => new SnapElement(newValue.Resolved, value, nSym));
+                var newKey = Element(key, shape.Key!, oldKeys, where);
+                var newValue = Element(value, shape.Value!, oldValues, where);
+                puts.Add(newKey.Value);
+                puts.Add(newValue.Value);
+                snapshot.Add(() => newKey.Snap(key));
+                snapshot.Add(() => newValue.Snap(value));
             }
             _ops.Add(new DictionaryPatchOp(coll, [.. unmatched.Select(j => BatchValue.Of(oldKeys[j].Oop))], puts));
             return () => [.. snapshot.Select(f => f())];
         }
 
-        private (BatchValue Value, bool IsSymbol) Element(object? value, GsShape shape, List<SnapElement> old, string where)
+        /// <summary>A planned collection element: its value in the batch and how to snapshot it afterwards.</summary>
+        private sealed record Planned(BatchValue Value, bool IsSymbol, Func<CollectionSnapshot>? Nested = null)
+        {
+            public SnapElement Snap(object? item) => new(Value.Resolved, item, IsSymbol, Nested?.Invoke());
+        }
+
+        private Planned Element(object? value, GsShape shape, List<SnapElement> old, string where)
         {
             if (shape.IsCollection)
-                throw new NotSupportedException($"{where}: collections of collections cannot be saved yet.");
+            {
+                if (value is null) return new Planned(BatchValue.Of(Oop.Nil), false);
+                // The same C# collection as before (maybe moved): keep the GemStone collection;
+                // PatchContents brings its contents up to date.
+                if (old.FirstOrDefault(e => e.Nested is not null && ReferenceEquals(e.Value, value)) is { Nested: { } nested } kept)
+                    return new Planned(BatchValue.Of(kept.Oop), false, () => nested);
+                var coll = Create(ctx.Kernel(CollectionClassName(null, shape)));
+                var created = ReplaceContents(coll, shape, Items(value), [], $"element of {where}");
+                return new Planned(coll, false, () => new CollectionSnapshot(coll.Resolved, created()));
+            }
             // Unchanged scalar elements keep their OOP (and with it String vs. Symbol).
             if (value is not null && !IsEntity(value) && old.FirstOrDefault(e => ValueEquals(value, e.Value)) is { } same)
-                return (BatchValue.Of(same.Oop), same.IsSymbol);
+                return new Planned(BatchValue.Of(same.Oop), same.IsSymbol);
             var asSymbol = old.Count > 0 ? old.Any(e => e.IsSymbol) : value is Enum;
             var snap = new PropertySnapshot { Oop = Oop.Nil, IsSymbol = asSymbol };
-            return (ToValue(value, shape, null, snap, where), asSymbol && value is string or Enum);
+            return new Planned(ToValue(value, shape, null, snap, where), asSymbol && value is string or Enum);
         }
 
         private BatchValue ToValue(object? value, GsShape shape, GsPropertyMap? property, PropertySnapshot? snap, string where)

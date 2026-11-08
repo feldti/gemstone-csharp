@@ -597,6 +597,15 @@ public sealed partial class GsObjectContext
             var elements = Elements(oop, _reports[oop], shape, where, declared)!;
             object? Element(Oop e, GsShape s, string w)
             {
+                if (snapshot is not null && s.IsCollection && !e.IsSpecial)
+                {
+                    // A collection inside a collection: its own snapshot, so that SaveChanges can patch it in place.
+                    var inner = new List<SnapElement>();
+                    var c = Collection(e, s, w, null, inner);
+                    snapshot.Add(new SnapElement(e, c, false, new CollectionSnapshot(e, inner)));
+                    _toRetain.Add(e);
+                    return c;
+                }
                 var v = this.Element(e, s, w);
                 snapshot?.Add(new SnapElement(e, v, IsSymbol(e)));
                 return v;

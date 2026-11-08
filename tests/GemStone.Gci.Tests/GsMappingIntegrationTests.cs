@@ -106,6 +106,7 @@ public sealed class MappingFixture : IDisposable
             def value: (UserGlobals at: #GsMapTestAccount) value: 'GsMapTestSpecialAccount' value: #('bonus').
             def value: Object value: 'GsMapTestOrder' value: #('number' 'total' 'account' 'lines').
             def value: Object value: 'GsMapTestHolder' value: #('items' 'idSet' 'bag' 'symbols' 'code' 'big' 'when').
+            def value: Object value: 'GsMapTestNested' value: #('rows' 'groups' 'grid').
 
             addr1 := (UserGlobals at: #GsMapTestAddress) new.
             addr1 instVarNamed: 'street' put: 'Hauptstraße 1'; instVarNamed: 'city' put: 'Köln'.
