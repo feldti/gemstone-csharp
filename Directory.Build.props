@@ -19,8 +19,8 @@
     <IsPackable>false</IsPackable>
     <VersionPrefix>0.1.0</VersionPrefix>
     <VersionSuffix>alpha</VersionSuffix>
-    <Authors>gemstone-csharp contributors</Authors>
-    <Copyright>Copyright (c) 2026 gemstone-csharp contributors</Copyright>
+    <Authors>Marten Feldtmann</Authors>
+    <Copyright>Copyright (c) 2026 Marten Feldtmann</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/feldti/gemstone-csharp</PackageProjectUrl>
     <RepositoryUrl>https://github.com/feldti/gemstone-csharp.git</RepositoryUrl>
