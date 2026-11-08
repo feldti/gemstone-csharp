@@ -1,5 +1,9 @@
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
+using System.Numerics;
+using System.Text;
+using GemStone.Gci.Native;
 
 namespace GemStone.Gci.Mapping;
 
@@ -43,14 +47,6 @@ public sealed partial class GsObjectContext : IDisposable
     /// <summary>OOPs this context holds in the export set (released by <see cref="Dispose"/> / <see cref="Clear"/>).</summary>
     private readonly HashSet<Oop> _retained = [];
 
-    private const string ReplaceContentsBlock =
-        "[:c :new | (c isKindOf: AbstractDictionary)" +
-        " ifTrue: [c keys do: [:k | c removeKey: k]. 1 to: new size by: 2 do: [:i | c at: (new at: i) put: (new at: i + 1)]]" +
-        " ifFalse: [(c isKindOf: Array)" +
-        "   ifTrue: [c size: new size. c replaceFrom: 1 to: new size with: new startingAt: 1]" +
-        "   ifFalse: [c removeAll: c copy. c addAll: new]]." +
-        " true]";
-
     /// <summary>
     /// Writes all changes of tracked objects to the session: changed properties, changed collection
     /// contents and new objects reachable from tracked ones. Does <b>not</b> commit; call
@@ -61,22 +57,23 @@ public sealed partial class GsObjectContext : IDisposable
     /// Only objects loaded with <see cref="GsLoadOptions.TrackChanges"/> (the default) or added with
     /// <see cref="Add"/> are tracked. Properties with <see cref="GsReadOnlyAttribute"/> are skipped.
     /// A changed collection is rewritten as a whole (its identity is kept). New objects are created
-    /// with <c>new</c> on their GemStone class. If SaveChanges throws, part of the changes may already
-    /// be written: abort the transaction, <see cref="Clear"/> the context and reload.
+    /// with <c>new</c> on their GemStone class.
+    /// <para>
+    /// All changes go to the server as one batch: a store traversal creates the values (strings,
+    /// floats, byte arrays …) and a list of operations, which one piece of Smalltalk then carries
+    /// out. That costs about six GCI calls, however many objects changed. Snapshots and the
+    /// tracked objects change only if the batch succeeds. If it fails, the batch may have
+    /// written part of the changes on the server: abort the transaction, <see cref="Clear"/>
+    /// the context and reload.
+    /// </para>
     /// </remarks>
     public int SaveChanges()
     {
         var run = new SaveRun(this);
-        try
-        {
-            foreach (var entry in _entries.Values.ToList())
-                run.Update(entry);
-            return run.Stores;
-        }
-        finally
-        {
-            run.ReleaseTemporaries();
-        }
+        foreach (var entry in _entries.Values.ToList())
+            run.Update(entry);
+        run.Execute();
+        return run.Stores;
     }
 
     /// <summary>
@@ -89,14 +86,9 @@ public sealed partial class GsObjectContext : IDisposable
         ArgumentNullException.ThrowIfNull(entity);
         if (_oops.TryGetValue(entity, out var known)) return known;
         var run = new SaveRun(this);
-        try
-        {
-            return run.Insert(entity);
-        }
-        finally
-        {
-            run.ReleaseTemporaries();
-        }
+        var oop = run.Insert(entity);
+        run.Execute();
+        return oop.Resolved;
     }
 
     /// <summary>Releases the OOPs held by this context (the objects stay usable on the server if referenced).</summary>
@@ -185,72 +177,193 @@ public sealed partial class GsObjectContext : IDisposable
         }
     }
 
-    // ---- One save --------------------------------------------------------------------------
+    // ---- One save ----------------------------------------------------------------------------
 
+    /// <summary>
+    /// Executed with the ops Array as <c>self</c>. Ops: <c>1 class</c> (create with <c>new</c>),
+    /// <c>2 target index value</c> (store a named instVar), <c>3 target items</c> (replace the
+    /// contents of a collection; items = Array of values, dictionaries as key/value pairs).
+    /// A value is two slots, <c>kind payload</c>: 0 = the payload itself, 1 = the n-th created
+    /// object, 2–8 = converted on the server (Symbol, Unicode string from Utf8, LargeInteger,
+    /// ScaledDecimal, Date, Time, DateAndTime). Answers the created objects followed by the
+    /// converted values, in the order in which they were evaluated.
+    /// </summary>
+    private const string BatchSource =
+        "| created converted val i n op |\n" +
+        "created := OrderedCollection new. converted := OrderedCollection new.\n" +
+        "val := [:k :p | | r | k == 0 ifTrue: [p] ifFalse: [k == 1 ifTrue: [created at: p] ifFalse: [\n" +
+        " r := k == 2 ifTrue: [((p isKindOf: Utf8) ifTrue: [p decodeToUnicode] ifFalse: [p]) asSymbol] ifFalse: [\n" +
+        " k == 3 ifTrue: [p decodeToUnicode] ifFalse: [\n" +
+        " k == 4 ifTrue: [Integer fromString: p] ifFalse: [\n" +
+        " k == 5 ifTrue: [((Integer fromString: (p at: 1)) / (10 raisedTo: (p at: 2))) asScaledDecimal: (p at: 2)] ifFalse: [\n" +
+        " k == 6 ifTrue: [Date fromDays: p] ifFalse: [\n" +
+        " k == 7 ifTrue: [Time fromMicroseconds: p] ifFalse: [\n" +
+        " k == 8 ifTrue: [DateAndTime posixSeconds: (p at: 1) / 1000000 offset: (Duration seconds: (p at: 2))] ifFalse: [\n" +
+        " self error: 'unknown value kind']]]]]]].\n" +
+        " converted add: r. r]]].\n" +
+        "i := 1. n := self size.\n" +
+        "[i <= n] whileTrue: [\n" +
+        " op := self at: i.\n" +
+        " op == 1 ifTrue: [created add: (self at: i + 1) new. i := i + 2] ifFalse: [\n" +
+        " op == 2 ifTrue: [(val value: (self at: i + 1) value: (self at: i + 2)) instVarAt: (self at: i + 3) put: (val value: (self at: i + 4) value: (self at: i + 5)). i := i + 6] ifFalse: [\n" +
+        " op == 3 ifTrue: [ | c src new |\n" +
+        "  c := val value: (self at: i + 1) value: (self at: i + 2). src := self at: i + 3.\n" +
+        "  new := Array new: src size // 2.\n" +
+        "  1 to: new size do: [:j | new at: j put: (val value: (src at: j * 2 - 1) value: (src at: j * 2))].\n" +
+        "  (c isKindOf: AbstractDictionary)\n" +
+        "   ifTrue: [c keys do: [:k | c removeKey: k]. 1 to: new size by: 2 do: [:j | c at: (new at: j) put: (new at: j + 1)]]\n" +
+        "   ifFalse: [(c isKindOf: Array)\n" +
+        "    ifTrue: [c size: new size. c replaceFrom: 1 to: new size with: new startingAt: 1]\n" +
+        "    ifFalse: [c removeAll: c copy. c addAll: new]].\n" +
+        "  i := i + 4] ifFalse: [\n" +
+        " self error: 'unknown op']]]].\n" +
+        "created asArray , converted asArray";
+
+    /// <summary>
+    /// A value in the batch. Its OOP is known up front (existing objects, immediates, objects the
+    /// store traversal creates) or only after the batch ran (created and converted objects).
+    /// </summary>
+    private sealed class BatchValue
+    {
+        public int Kind { get; init; }
+
+        /// <summary>The OOP (kind 0 with <see cref="Spec"/> null), or the payload of a conversion.</summary>
+        public Oop Payload { get; init; }
+
+        /// <summary>A new object in the store traversal: the value itself (kind 0) or the payload.</summary>
+        public NewObjectSpec? Spec { get; init; }
+
+        /// <summary>Kind 1: 1-based index into the created objects.</summary>
+        public int Created { get; init; }
+
+        /// <summary>Kinds 2–8: index into the converted values, assigned when the ops are written.</summary>
+        public int Converted { get; set; } = -1;
+
+        public Oop Resolved { get; set; }
+
+        public static BatchValue Of(Oop oop) => new() { Payload = oop, Resolved = oop };
+    }
+
+    /// <summary>An object the store traversal creates (its OOP is allocated when the batch is sent).</summary>
+    private sealed class NewObjectSpec
+    {
+        public required Oop Class { get; init; }
+        public byte[]? Bytes { get; init; }
+        public List<object>? Slots { get; init; } // Oop, NewObjectSpec or BatchValue (two slots)
+        public double? Float { get; init; }
+        public Oop Oop { get; set; }
+    }
+
+    private abstract record BatchOp;
+    private sealed record CreateOp(Oop Class) : BatchOp;
+    private sealed record StoreOp(BatchValue Target, int Index, BatchValue Value) : BatchOp;
+    private sealed record ReplaceOp(BatchValue Target, List<BatchValue> Items) : BatchOp;
+
+    /// <summary>An object whose properties are compared and written: tracked, or new in this save.</summary>
+    private sealed class SaveTarget(object entity, GsTypeMap map, BatchValue oop, EntityEntry? entry)
+    {
+        public object Entity { get; } = entity;
+        public GsTypeMap Map { get; } = map;
+        public BatchValue Oop { get; } = oop;
+        public EntityEntry? Entry { get; } = entry;
+
+        public PropertySnapshot? Snapshot(GsPropertyMap p) =>
+            Entry is not null && Entry.Properties.TryGetValue(p, out var snap) ? snap : null;
+    }
+
+    /// <summary>
+    /// Plans one SaveChanges/Add: compares, collects the operations and new objects, then sends
+    /// everything at once (<see cref="GciSession.StoreAndExecute"/>). Snapshots and the identity
+    /// map change only after the batch succeeded.
+    /// </summary>
     [RequiresUnreferencedCode("The object mapper inspects mapped types by reflection.")]
     [RequiresDynamicCode("The object mapper creates generic collection types at runtime.")]
     private sealed class SaveRun(GsObjectContext ctx)
     {
         private readonly GciSession _session = ctx._session;
-        private readonly List<Oop> _temporaries = [];
-        private Oop _replaceBlock = Oop.Nil;
+        private readonly List<BatchOp> _ops = [];
+        private readonly List<BatchValue> _created = [];
+        private readonly Dictionary<object, SaveTarget> _inserted = new(ReferenceEqualityComparer.Instance);
+        private readonly List<Action> _onSuccess = [];
 
         public int Stores { get; private set; }
 
-        public void Update(EntityEntry entry)
+        public void Update(EntityEntry entry) =>
+            Update(new SaveTarget(entry.Entity, entry.Map, BatchValue.Of(entry.Oop), entry));
+
+        /// <summary>Plans a new object (once per entity) and returns its value.</summary>
+        public BatchValue Insert(object entity)
         {
-            foreach (var p in entry.Map.Properties)
-            {
-                if (p.ReadOnly) continue;
-                var current = p.Property.GetValue(entry.Entity);
-                entry.Properties.TryGetValue(p, out var snap);
-
-                if (p.Converter is null && p.Shape.IsCollection)
-                {
-                    UpdateCollection(entry, p, current, snap);
-                    continue;
-                }
-                if (snap is not null && ValueEquals(current, snap.Value)) continue;
-
-                var oop = ToOop(current, p.Shape, p, snap, p.Path);
-                _session.StoreNamedOop(entry.Oop, p.Index, oop);
-                Stores++;
-                entry.Properties[p] = new PropertySnapshot
-                {
-                    Oop = oop, Value = current,
-                    IsSymbol = snap?.IsSymbol ?? (current is Enum), LowerFirst = snap?.LowerFirst ?? true,
-                };
-            }
-        }
-
-        public Oop Insert(object entity)
-        {
+            if (_inserted.TryGetValue(entity, out var known)) return known.Oop;
             var shape = ctx.Prepare(entity.GetType());
             if (shape.Kind != GsShapeKind.Mapped)
                 throw GsMappingException.For($"{entity.GetType().Name} has no [GsClass] and cannot be saved as a new object.");
             var map = shape.Map!;
-            var oop = _session.Perform(map.ClassOop, "new"); // exported: the context owns it now
-            ctx._retained.Add(oop);
-            ctx._identity[oop] = entity;
-            ctx._oops[entity] = oop;
-            var entry = new EntityEntry(entity, oop, map);
-            ctx._entries[entity] = entry; // before Update: cycles back to this object find the OOP
-            map.OopProperty?.SetValue(entity, oop);
-            Update(entry);
+            var oop = Create(map.ClassOop);
+            var target = new SaveTarget(entity, map, oop, null);
+            _inserted[entity] = target; // before Update: cycles back to this object find it
+            var entry = new EntityEntry[1];
+            _onSuccess.Add(() =>
+            {
+                var resolved = oop.Resolved;
+                ctx._identity[resolved] = entity;
+                ctx._oops[entity] = resolved;
+                ctx._entries[entity] = entry[0] = new EntityEntry(entity, resolved, map);
+                map.OopProperty?.SetValue(entity, resolved);
+            });
+            Update(target, () => entry[0]);
             return oop;
         }
 
-        private void UpdateCollection(EntityEntry entry, GsPropertyMap p, object? current, PropertySnapshot? snap)
+        private BatchValue Create(Oop cls)
+        {
+            _ops.Add(new CreateOp(cls));
+            var value = new BatchValue { Kind = 1, Created = _created.Count + 1 };
+            _created.Add(value);
+            return value;
+        }
+
+        private void Update(SaveTarget target, Func<EntityEntry>? newEntry = null)
+        {
+            var entry = target.Entry;
+            void Remember(GsPropertyMap p, Func<PropertySnapshot> snapshot) =>
+                _onSuccess.Add(() => (entry ?? newEntry!()).Properties[p] = snapshot());
+
+            foreach (var p in target.Map.Properties)
+            {
+                if (p.ReadOnly) continue;
+                var current = p.Property.GetValue(target.Entity);
+                var snap = target.Snapshot(p);
+
+                if (p.Converter is null && p.Shape.IsCollection)
+                {
+                    UpdateCollection(target, p, current, snap, Remember);
+                    continue;
+                }
+                if (snap is not null && ValueEquals(current, snap.Value)) continue;
+
+                var value = ToValue(current, p.Shape, p, snap, p.Path);
+                Store(target, p, value);
+                var isSymbol = snap?.IsSymbol ?? (current is Enum);
+                var lowerFirst = snap?.LowerFirst ?? true;
+                Remember(p, () => new PropertySnapshot { Oop = value.Resolved, Value = current, IsSymbol = isSymbol, LowerFirst = lowerFirst });
+            }
+        }
+
+        private void Store(SaveTarget target, GsPropertyMap p, BatchValue value)
+        {
+            _ops.Add(new StoreOp(target.Oop, p.Index, value));
+            Stores++;
+        }
+
+        private void UpdateCollection(SaveTarget target, GsPropertyMap p, object? current, PropertySnapshot? snap,
+            Action<GsPropertyMap, Func<PropertySnapshot>> remember)
         {
             var old = snap?.Collection;
             if (current is null)
             {
-                if (snap is null || !snap.Oop.IsNil)
-                {
-                    _session.StoreNamedOop(entry.Oop, p.Index, Oop.Nil);
-                    Stores++;
-                }
-                entry.Properties[p] = new PropertySnapshot { Oop = Oop.Nil };
+                if (snap is null || !snap.Oop.IsNil) Store(target, p, BatchValue.Of(Oop.Nil));
+                remember(p, () => new PropertySnapshot { Oop = Oop.Nil });
                 return;
             }
 
@@ -259,20 +372,29 @@ public sealed partial class GsObjectContext : IDisposable
             {
                 if (!ContentsEqual(items, old.Elements, p.Shape.Kind))
                 {
-                    old.Elements = ReplaceContents(old.Oop, p.Shape, items, old.Elements, p.Path);
+                    var elements = ReplaceContents(BatchValue.Of(old.Oop), p.Shape, items, old.Elements, p.Path);
                     Stores++;
+                    remember(p, () =>
+                    {
+                        old.Elements = elements();
+                        return new PropertySnapshot { Oop = old.Oop, Value = current, Collection = old };
+                    });
                 }
-                entry.Properties[p] = new PropertySnapshot { Oop = old.Oop, Value = current, Collection = old };
+                else
+                {
+                    remember(p, () => new PropertySnapshot { Oop = old.Oop, Value = current, Collection = old });
+                }
                 return;
             }
 
             // Was nil (or a new object): create the GemStone collection.
-            var coll = _session.Perform(ctx.Kernel(CollectionClassName(p)), "new");
-            ctx._retained.Add(coll);
-            var elements = ReplaceContents(coll, p.Shape, items, [], p.Path);
-            _session.StoreNamedOop(entry.Oop, p.Index, coll);
-            Stores++;
-            entry.Properties[p] = new PropertySnapshot { Oop = coll, Value = current, Collection = new CollectionSnapshot(coll, elements) };
+            var coll = Create(ctx.Kernel(CollectionClassName(p)));
+            var created = ReplaceContents(coll, p.Shape, items, [], p.Path);
+            Store(target, p, coll);
+            remember(p, () => new PropertySnapshot
+            {
+                Oop = coll.Resolved, Value = current, Collection = new CollectionSnapshot(coll.Resolved, created()),
+            });
         }
 
         private static string CollectionClassName(GsPropertyMap p) => p.CollectionKind switch
@@ -293,103 +415,248 @@ public sealed partial class GsObjectContext : IDisposable
             },
         };
 
-        /// <summary>Rewrites a collection's contents on the server (keeps its identity).</summary>
-        private List<SnapElement> ReplaceContents(Oop coll, GsShape shape, List<object?> items, List<SnapElement> old, string where)
+        /// <summary>Plans rewriting a collection's contents (keeps its identity); returns the new snapshot elements, resolved after the batch.</summary>
+        private Func<List<SnapElement>> ReplaceContents(BatchValue coll, GsShape shape, List<object?> items, List<SnapElement> old, string where)
         {
             var isDict = shape.Kind == GsShapeKind.Dictionary;
-            var elements = new List<SnapElement>(items.Count);
+            var values = new List<BatchValue>(items.Count);
+            var symbols = new List<bool>(items.Count);
             for (var i = 0; i < items.Count; i++)
             {
                 var elementShape = isDict ? (i % 2 == 0 ? shape.Key! : shape.Value!) : shape.Element!;
-                var sameRole = isDict ? old.Where((_, j) => j % 2 == i % 2) : old;
-                elements.Add(ElementOop(items[i], elementShape, [.. sameRole], where));
+                var sameRole = isDict ? old.Where((_, j) => j % 2 == i % 2).ToList() : old;
+                var (value, isSymbol) = Element(items[i], elementShape, sameRole, where);
+                values.Add(value);
+                symbols.Add(isSymbol);
             }
-
-            var array = _session.NewObject(KnownClasses.Array, elements.Count);
-            _temporaries.Add(array);
-            if (elements.Count > 0)
-                _session.StoreVaryingOops(array, 1, [.. elements.Select(e => e.Oop)]);
-            if (_replaceBlock.IsNil)
-            {
-                _replaceBlock = _session.Execute(ReplaceContentsBlock);
-                _temporaries.Add(_replaceBlock);
-            }
-            _session.Perform(_replaceBlock, "value:value:", coll, array); // returns true: nothing to release
-            return elements;
+            _ops.Add(new ReplaceOp(coll, values));
+            return () => [.. values.Select((v, i) => new SnapElement(v.Resolved, items[i], symbols[i]))];
         }
 
-        private SnapElement ElementOop(object? value, GsShape shape, List<SnapElement> old, string where)
+        private (BatchValue Value, bool IsSymbol) Element(object? value, GsShape shape, List<SnapElement> old, string where)
         {
             if (shape.IsCollection)
                 throw new NotSupportedException($"{where}: collections of collections cannot be saved yet.");
             // Unchanged scalar elements keep their OOP (and with it String vs. Symbol).
             if (value is not null && !IsEntity(value) && old.FirstOrDefault(e => ValueEquals(value, e.Value)) is { } same)
-                return same;
+                return (BatchValue.Of(same.Oop), same.IsSymbol);
             var asSymbol = old.Count > 0 ? old.Any(e => e.IsSymbol) : value is Enum;
             var snap = new PropertySnapshot { Oop = Oop.Nil, IsSymbol = asSymbol };
-            return new SnapElement(ToOop(value, shape, null, snap, where), value, asSymbol && value is string or Enum);
+            return (ToValue(value, shape, null, snap, where), asSymbol && value is string or Enum);
         }
 
-        private Oop ToOop(object? value, GsShape shape, GsPropertyMap? property, PropertySnapshot? snap, string where)
+        private BatchValue ToValue(object? value, GsShape shape, GsPropertyMap? property, PropertySnapshot? snap, string where)
         {
             if (property?.Converter is { } converter)
                 return converter is IGsTwoWayConverter twoWay
                     ? Scalar(twoWay.ToGemStone(value, property.Property.PropertyType), snap, where)
                     : throw new NotSupportedException($"{where}: {converter.GetType().Name} cannot convert values back to GemStone (implement IGsTwoWayConverter).");
-            if (value is null) return Oop.Nil;
+            if (value is null) return BatchValue.Of(Oop.Nil);
             return shape.Kind switch
             {
-                GsShapeKind.Oop => (Oop)value,
-                GsShapeKind.Mapped => EntityOop(value),
-                GsShapeKind.Object => value is Oop o ? o : IsEntity(value) ? EntityOop(value) : Scalar(value, snap, where),
+                GsShapeKind.Oop => BatchValue.Of((Oop)value),
+                GsShapeKind.Mapped => EntityValue(value),
+                GsShapeKind.Object => value is Oop o ? BatchValue.Of(o) : IsEntity(value) ? EntityValue(value) : Scalar(value, snap, where),
                 GsShapeKind.Scalar => Scalar(value, snap, where),
                 _ => throw new NotSupportedException($"{where}: nested collections cannot be saved yet."),
             };
         }
 
-        private Oop EntityOop(object entity) => ctx._oops.TryGetValue(entity, out var oop) ? oop : Insert(entity);
+        private BatchValue EntityValue(object entity) =>
+            ctx._oops.TryGetValue(entity, out var oop) ? BatchValue.Of(oop) : Insert(entity);
 
-        private Oop Scalar(object? value, PropertySnapshot? snap, string where)
+        // ---- Scalars ------------------------------------------------------------------------
+
+        private BatchValue Scalar(object? value, PropertySnapshot? snap, string where)
         {
-            Oop oop;
             switch (value)
             {
-                case null:
-                    return Oop.Nil;
-                case Oop o:
-                    return o;
+                case null: return BatchValue.Of(Oop.Nil);
+                case Oop o: return BatchValue.Of(o);
                 case Enum e when snap?.Oop.IsSmallInteger == true:
-                    return Oop.FromSmallInteger(Convert.ToInt64(e, System.Globalization.CultureInfo.InvariantCulture));
+                    return BatchValue.Of(Oop.FromSmallInteger(Convert.ToInt64(e, CultureInfo.InvariantCulture)));
                 case Enum e:
                 {
                     var name = e.ToString();
                     if (snap?.LowerFirst ?? true) name = char.ToLowerInvariant(name[0]) + name[1..];
-                    oop = _session.NewSymbol(name);
-                    break;
+                    return Converted(2, Text(name));
                 }
-                case string s when snap?.IsSymbol == true:
-                    oop = _session.NewSymbol(s);
-                    break;
-                default:
-                    try
-                    {
-                        oop = _session.FromValue(value);
-                    }
-                    catch (ArgumentException ex)
-                    {
-                        throw GsMappingException.For($"{where}: {ex.Message}");
-                    }
-                    break;
+                case string s when snap?.IsSymbol == true: return Converted(2, Text(s));
+                case string s: return Ascii.IsValid(s) ? New(Text(s)) : Converted(3, Text(s));
+                case bool b: return BatchValue.Of(Oop.FromBoolean(b));
+                case Rune r: return BatchValue.Of(Oop.FromCharacter(r));
+                case char c when !char.IsSurrogate(c): return BatchValue.Of(Oop.FromCharacter(new Rune(c)));
+                case sbyte or byte or short or ushort or int or uint or long:
+                    return Integer(Convert.ToInt64(value, CultureInfo.InvariantCulture));
+                case ulong u: return u <= long.MaxValue ? Integer((long)u) : Converted(4, Ascii8(u.ToString(CultureInfo.InvariantCulture)));
+                case BigInteger big:
+                    return big >= long.MinValue && big <= long.MaxValue ? Integer((long)big) : Converted(4, Ascii8(big.ToString(CultureInfo.InvariantCulture)));
+                case float f: return Double(f);
+                case double d: return Double(d);
+                case decimal m:
+                {
+                    // decimal = 96-bit integer / 10^scale: exactly a ScaledDecimal.
+                    var bits = decimal.GetBits(m);
+                    var unscaled = ((BigInteger)(uint)bits[2] << 64) | ((BigInteger)(uint)bits[1] << 32) | (uint)bits[0];
+                    if (bits[3] < 0) unscaled = -unscaled;
+                    var scale = (bits[3] >> 16) & 0xFF;
+                    return Converted(5, Pair(Ascii8(unscaled.ToString(CultureInfo.InvariantCulture)), Oop.FromSmallInteger(scale)));
+                }
+                case DateOnly date: return Converted(6, Oop.FromSmallInteger(date.DayNumber - GciSession.SmalltalkDateBase));
+                case TimeOnly time: return Converted(7, Oop.FromSmallInteger(time.Ticks / TimeSpan.TicksPerMicrosecond));
+                case DateTime dt: return DateAndTime(new DateTimeOffset(dt));
+                case DateTimeOffset dto: return DateAndTime(dto);
+                case byte[] bytes: return New(new NewObjectSpec { Class = KnownClasses.ByteArray, Bytes = (byte[])bytes.Clone() });
+                default: throw GsMappingException.For($"{where}: no GemStone mapping for {value.GetType()}.");
             }
-            if (!oop.IsSpecial) _temporaries.Add(oop); // referenced from its holder once stored
-            return oop;
         }
 
-        public void ReleaseTemporaries()
+        private BatchValue Integer(long value) =>
+            Oop.FitsSmallInteger(value) ? BatchValue.Of(Oop.FromSmallInteger(value)) : Converted(4, Ascii8(value.ToString(CultureInfo.InvariantCulture)));
+
+        private BatchValue Double(double value) =>
+            Oop.TryFromSmallDouble(value, out var small) ? BatchValue.Of(small) : New(new NewObjectSpec { Class = KnownClasses.Float, Float = value });
+
+        private BatchValue DateAndTime(DateTimeOffset value)
         {
-            if (_temporaries.Count > 0 && _session.IsLoggedIn)
-                _session.Release([.. _temporaries]);
-            _temporaries.Clear();
+            var micros = (value.UtcTicks - GciPosixDateAndTime.PosixEpoch.Ticks) / TimeSpan.TicksPerMicrosecond;
+            return Converted(8, Pair(Oop.FromSmallInteger(micros), Oop.FromSmallInteger((long)value.Offset.TotalSeconds)));
+        }
+
+        /// <summary>A String (ASCII) or Utf8 (anything else) for the store traversal.</summary>
+        private static NewObjectSpec Text(string s) => Ascii.IsValid(s)
+            ? new NewObjectSpec { Class = KnownClasses.String, Bytes = Encoding.ASCII.GetBytes(s) }
+            : new NewObjectSpec { Class = KnownClasses.Utf8, Bytes = Encoding.UTF8.GetBytes(s) };
+
+        private static NewObjectSpec Ascii8(string s) => new() { Class = KnownClasses.String, Bytes = Encoding.ASCII.GetBytes(s) };
+
+        private static NewObjectSpec Pair(object first, object second) => new() { Class = KnownClasses.Array, Slots = [first, second] };
+
+        private BatchValue New(NewObjectSpec spec)
+        {
+            var value = new BatchValue { Spec = spec };
+            _onResolve.Add(() => value.Resolved = spec.Oop);
+            return value;
+        }
+
+        private static BatchValue Converted(int kind, object payload) =>
+            new() { Kind = kind, Spec = payload as NewObjectSpec, Payload = payload is Oop o ? o : default };
+
+        private readonly List<Action> _onResolve = [];
+
+        // ---- Sending ------------------------------------------------------------------------
+
+        /// <summary>Sends the batch (if there is anything to do) and applies the snapshots.</summary>
+        public void Execute()
+        {
+            if (_ops.Count > 0) Send();
+            foreach (var action in _onSuccess) action();
+        }
+
+        private void Send()
+        {
+            // Every op becomes slots of the ops Array; values are (kind, payload) pairs.
+            var converted = new List<BatchValue>();
+            var slots = new List<object>();
+            void Value(BatchValue v)
+            {
+                slots.Add(Oop.FromSmallInteger(v.Kind));
+                if (v.Kind == 1) slots.Add(Oop.FromSmallInteger(v.Created));
+                else slots.Add((object?)v.Spec ?? v.Payload);
+                if (v.Kind >= 2)
+                {
+                    v.Converted = converted.Count;
+                    converted.Add(v);
+                }
+            }
+            foreach (var op in _ops)
+            {
+                switch (op)
+                {
+                    case CreateOp c:
+                        slots.Add(Oop.FromSmallInteger(1));
+                        slots.Add(c.Class);
+                        break;
+                    case StoreOp st:
+                        slots.Add(Oop.FromSmallInteger(2));
+                        Value(st.Target);
+                        slots.Add(Oop.FromSmallInteger(st.Index));
+                        Value(st.Value);
+                        break;
+                    case ReplaceOp r:
+                        slots.Add(Oop.FromSmallInteger(3));
+                        Value(r.Target);
+                        var items = new List<object>(r.Items.Count * 2);
+                        var itemSlots = new NewObjectSpec { Class = KnownClasses.Array, Slots = items };
+                        foreach (var v in r.Items)
+                        {
+                            items.Add(Oop.FromSmallInteger(v.Kind));
+                            items.Add(v.Kind == 1 ? Oop.FromSmallInteger(v.Created) : (object?)v.Spec ?? v.Payload);
+                            if (v.Kind >= 2)
+                            {
+                                v.Converted = converted.Count;
+                                converted.Add(v);
+                            }
+                        }
+                        slots.Add(itemSlots);
+                        break;
+                }
+            }
+            var root = new NewObjectSpec { Class = KnownClasses.Array, Slots = slots };
+            var specs = Reachable(root);
+
+            var ids = _session.GetFreeOops(specs.Count);
+            for (var i = 0; i < specs.Count; i++) specs[i].Oop = ids[i];
+            var objects = specs.Select(ToNewObject).ToList();
+
+            var result = Oop.Nil;
+            try
+            {
+                result = _session.StoreAndExecute(objects, BatchSource, root.Oop);
+                var answer = _session.FetchVaryingOops(result);
+                if (answer.Length != _created.Count + converted.Count)
+                    throw new GciException($"SaveChanges batch answered {answer.Length} objects, expected {_created.Count + converted.Count}.");
+                for (var i = 0; i < _created.Count; i++) _created[i].Resolved = answer[i];
+                for (var i = 0; i < converted.Count; i++) converted[i].Resolved = answer[_created.Count + i];
+                foreach (var action in _onResolve) action();
+                ctx.RetainAll(_created.Select(c => c.Resolved)); // new objects: the context owns them now
+            }
+            finally
+            {
+                // The objects of the store traversal are referenced from their holders now (or garbage).
+                if (_session.IsLoggedIn) _session.Release([.. ids, result]);
+            }
+        }
+
+        /// <summary>All objects of the store traversal: the ops Array and everything its slots create.</summary>
+        private static List<NewObjectSpec> Reachable(NewObjectSpec root)
+        {
+            var all = new List<NewObjectSpec>();
+            var seen = new HashSet<NewObjectSpec>(ReferenceEqualityComparer.Instance);
+            var todo = new Stack<NewObjectSpec>();
+            todo.Push(root);
+            while (todo.Count > 0)
+            {
+                var spec = todo.Pop();
+                if (!seen.Add(spec)) continue;
+                all.Add(spec);
+                foreach (var slot in spec.Slots ?? [])
+                    if (slot is NewObjectSpec child) todo.Push(child);
+            }
+            return all;
+        }
+
+        private static GciNewObject ToNewObject(NewObjectSpec spec)
+        {
+            if (spec.Float is { } d) return GciNewObject.Float(spec.Oop, d);
+            if (spec.Bytes is { } bytes) return GciNewObject.ByteObject(spec.Oop, spec.Class, bytes);
+            var oops = spec.Slots!.Select(s => s switch
+            {
+                Oop o => o,
+                NewObjectSpec n => n.Oop,
+                _ => throw new InvalidOperationException("Unexpected slot."),
+            }).ToArray();
+            return GciNewObject.Pointers(spec.Oop, spec.Class, oops);
         }
     }
 }

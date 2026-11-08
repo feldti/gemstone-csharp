@@ -1,3 +1,5 @@
+using System.Numerics;
+using System.Text;
 using GemStone.Gci.Mapping;
 
 namespace GemStone.Gci.Tests.Mapping;
@@ -219,5 +221,140 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
             ctx.SaveChanges();
         }
         Assert.Equal(before, Size());
+    }
+
+    // ---- Batched writes ----------------------------------------------------------------------
+
+    public static TheoryData<object, object> ScalarValues => new()
+    {
+        { 12.34m, 12.34m },
+        { -0.0001m, -0.0001m },
+        { 123456789012345678901234.5678m, 123456789012345678901234.5678m }, // LargeInteger unscaled
+        { decimal.MaxValue, decimal.MaxValue },
+        { 7L, 7L },
+        { long.MaxValue, long.MaxValue }, // LargeInteger
+        { long.MinValue, long.MinValue },
+        { ulong.MaxValue, new BigInteger(ulong.MaxValue) },
+        { BigInteger.Pow(10, 40), BigInteger.Pow(10, 40) },
+        { -BigInteger.Pow(7, 50), -BigInteger.Pow(7, 50) },
+        { 1.5, 1.5 },
+        { 1e100, 1e100 }, // Float object
+        { -1e-300, -1e-300 },
+        { double.PositiveInfinity, double.PositiveInfinity },
+        { "plain", "plain" },
+        { "Grüße 😀", "Grüße 😀" },
+        { true, true },
+        { new Rune('ß'), new Rune('ß') },
+        { new DateOnly(1899, 12, 31), new DateOnly(1899, 12, 31) },
+        { new TimeOnly(23, 59, 58, 999), new TimeOnly(23, 59, 58, 999) },
+        { new DateTimeOffset(2026, 11, 8, 10, 30, 15, TimeSpan.FromHours(2)).AddTicks(1234560), new DateTimeOffset(2026, 11, 8, 10, 30, 15, TimeSpan.FromHours(2)).AddTicks(1234560) },
+        { new DateTimeOffset(1950, 1, 1, 0, 0, 0, TimeSpan.FromHours(-5)), new DateTimeOffset(1950, 1, 1, 0, 0, 0, TimeSpan.FromHours(-5)) },
+        { new byte[] { 0, 1, 255 }, new byte[] { 0, 1, 255 } },
+    };
+
+    [StoneTheory]
+    [MemberData(nameof(ScalarValues))]
+    public void ScalarValuesSurviveABatchedSave(object written, object expected)
+    {
+        var key = NewAccount();
+        using var ctx = new GsObjectContext(S);
+        ctx.Load<Account>($"UserGlobals at: #{key}").Extra = written;
+        Assert.Equal(1, ctx.SaveChanges());
+        Assert.Equal(0, ctx.SaveChanges());
+
+        using var fresh = new GsObjectContext(S);
+        var read = fresh.Load<Account>($"UserGlobals at: #{key}").Extra;
+        Assert.Equal(expected, read);
+        if (expected is DateTimeOffset dto) Assert.Equal(dto.Offset, ((DateTimeOffset)read!).Offset);
+    }
+
+    [StoneFact]
+    public void StringsGetTheSameClassesAsNewString()
+    {
+        var key = NewAccount();
+        using var ctx = new GsObjectContext(S);
+        var a = ctx.Load<Account>($"UserGlobals at: #{key}");
+        var acc = $"(UserGlobals at: #{key})";
+        foreach (var text in new[] { "plain", "Grüße", "Grüße 😀", "" })
+        {
+            a.Name = text;
+            ctx.SaveChanges();
+            var expected = S.FetchClass(S.NewString(text));
+            Assert.Equal(S.Evaluate<string>($"(Object _objectForOop: {expected.Value}) name"), Eval<string>($"({acc} instVarNamed: 'accName') class name"));
+            Assert.Equal(text, Eval<string>($"{acc} instVarNamed: 'accName'"));
+        }
+        a.Status = AccountStatus.Closed;
+        ctx.SaveChanges();
+        Assert.True(Eval<bool>($"({acc} instVarNamed: 'state') == #closed"));
+    }
+
+    [StoneFact]
+    public void ManyChangesCostAFewRoundTrips()
+    {
+        var key = "GsSaveTest_" + Guid.NewGuid().ToString("N");
+        S.Execute($$"""
+            | all |
+            all := OrderedCollection new.
+            1 to: 300 do: [:i | | a |
+              a := (UserGlobals at: #GsMapTestAccount) new.
+              a instVarNamed: 'accName' put: 'acc', i printString; instVarNamed: 'amount' put: (i asScaledDecimal: 2);
+                instVarNamed: 'orderList' put: OrderedCollection new; instVarNamed: 'tags' put: Set new; instVarNamed: 'state' put: #active.
+              all add: a].
+            UserGlobals at: #{{key}} put: all asArray.
+            true
+            """);
+        using var ctx = new GsObjectContext(S);
+        var accounts = ctx.Load<Account[]>($"UserGlobals at: #{key}");
+        Assert.Equal(300, accounts.Length);
+
+        var before = S.CallCount;
+        foreach (var a in accounts)
+        {
+            a.Balance += 0.01m;
+            a.Name += " Müller";
+            a.Opened = new DateOnly(2026, 1, 1);
+            a.Tags.Add("vip");
+            a.Orders.Add(new Order { Number = 1, Total = 1e100, Account = a, Lines = new() { ["x"] = long.MaxValue } });
+        }
+        var stores = ctx.SaveChanges();
+        var calls = S.CallCount - before;
+
+        Assert.Equal(300 * 9, stores); // 3 scalars + 2 collections per account, 4 instVars per new order
+        // Measured: 10 (7509 with one or more round trips per change); 4 of them resolve
+        // KeyValueDictionary for the new 'lines' once per context.
+        Assert.InRange(calls, 1, 15);
+        var all = $"(UserGlobals at: #{key})";
+        Assert.Equal(300, Eval<long>($"({all} select: [:a | (a instVarNamed: 'accName') endsWith: ' Müller']) size"));
+        Assert.Equal(1.01m, Eval<decimal>($"({all} at: 1) instVarNamed: 'amount'"));
+        Assert.True(Eval<bool>($"({all} allSatisfy: [:a | ((a instVarNamed: 'orderList') first instVarNamed: 'account') == a])"));
+        Assert.Equal(long.MaxValue, Eval<long>($"(((({all} at: 300) instVarNamed: 'orderList') first instVarNamed: 'lines') at: 'x')"));
+        Assert.True(ctx.TryGetOop(accounts[299].Orders[0], out var orderOop));
+        Assert.True(Eval<bool>($"((({all} at: 300) instVarNamed: 'orderList') first) == (Object _objectForOop: {orderOop.Value})"));
+        Assert.Equal(0, ctx.SaveChanges());
+
+        // A second round: only the batch itself (free OOPs, store traversal, execute, fetch the
+        // answer, retain the new objects, release the traversal objects).
+        before = S.CallCount;
+        foreach (var a in accounts) a.Orders.Add(new Order { Number = 2, Lines = new() { ["y"] = 1 } });
+        ctx.SaveChanges();
+        Assert.Equal(6, S.CallCount - before);
+        Assert.Equal(600, Eval<long>($"{all} inject: 0 into: [:sum :a | sum + (a instVarNamed: 'orderList') size]"));
+    }
+
+    [StoneFact]
+    public void AFailedBatchLeavesTheContextUnchanged()
+    {
+        var key = NewAccount();
+        using var ctx = new GsObjectContext(S);
+        var a = ctx.Load<Account>($"UserGlobals at: #{key}");
+        S.Execute($"(UserGlobals at: #{key}) immediateInvariant. true");
+
+        var address = new Address { City = "Trier" };
+        a.Address = address;
+        a.Balance = 5m;
+        Assert.Throws<GciException>(() => ctx.SaveChanges());
+        Assert.False(ctx.TryGetOop(address, out _)); // not tracked: the batch failed
+        Assert.Throws<GciException>(() => ctx.SaveChanges()); // the changes are still pending
+        Assert.Equal(10.50m, Eval<decimal>($"(UserGlobals at: #{key}) instVarNamed: 'amount'"));
     }
 }

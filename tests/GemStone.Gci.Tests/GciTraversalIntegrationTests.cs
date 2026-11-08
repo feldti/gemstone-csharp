@@ -3,6 +3,39 @@ namespace GemStone.Gci.Tests;
 [Collection("Stone")]
 public class GciTraversalIntegrationTests
 {
+    [StoneFact]
+    public void SmallDoubleEncodesLocallyLikeGciFltToOop()
+    {
+        using var s = StoneEnv.Login();
+        var rnd = new Random(42);
+        var values = new List<double>
+        {
+            0.0, -0.0, 1.0, -1.5, 0.1, 1e30, -1e38, 6e38, 7e38, 1e-38, 2e-38, 5e-39, 1e-39, 1e100, 1e-100,
+            double.MaxValue, double.Epsilon, double.NaN, double.PositiveInfinity, double.NegativeInfinity,
+            BitConverter.Int64BitsToDouble(0x3810000000000000), BitConverter.Int64BitsToDouble(0x380FFFFFFFFFFFFF),
+            BitConverter.Int64BitsToDouble(0x47FFFFFFFFFFFFFF), BitConverter.Int64BitsToDouble(0x4800000000000000),
+            BitConverter.Int64BitsToDouble(0x3800000000000000), BitConverter.Int64BitsToDouble(0x3800000000000001),
+        };
+        var bytes = new byte[8];
+        for (var i = 0; i < 500; i++)
+        {
+            rnd.NextBytes(bytes);
+            values.Add(BitConverter.ToDouble(bytes, 0));
+            values.Add(rnd.NextDouble() * Math.Pow(10, rnd.Next(-40, 40)));
+        }
+        foreach (var d in values)
+        {
+            var server = s.NewFloat(d);
+            try
+            {
+                var ok = Oop.TryFromSmallDouble(d, out var local);
+                Assert.True(server.IsSmallDouble == ok, $"{d:R} bits {BitConverter.DoubleToInt64Bits(d):X16}: server {server.Value:X16}, local {ok}");
+                if (server.IsSmallDouble) Assert.Equal(server, local);
+            }
+            finally { s.Release(server); }
+        }
+    }
+
     [StoneTheory]
     [InlineData("1.5", 1.5)]
     [InlineData("-2.25", -2.25)]

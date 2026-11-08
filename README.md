@@ -144,8 +144,11 @@ How `SaveChanges` works:
 - **Loading is batched:** values a traversal cannot decode locally (large ScaledDecimals,
   LargeIntegers, DateAndTime/Date/Time) are converted in one round trip per load. Loading 3,000
   accounts with a `decimal` balance takes 75 GCI calls instead of 12,068.
-- **What it doesn't do:** it doesn't commit. If a save fails halfway, abort, `Clear()` the
-  context and reload.
+- **Writing is batched too:** all changes go to the server in one batch, about six GCI calls,
+  however many objects changed. Saving 2,700 changes and 300 new objects took 10 GCI calls
+  instead of 7,509. The context only takes on the new state if the batch succeeds.
+- **What it doesn't do:** it doesn't commit. If a save fails, the server may already hold part
+  of the changes: abort, `Clear()` the context and reload.
 
 Supported collection types:
 - Array, OrderedCollection, SortedCollection → `List<T>` / `T[]`
@@ -226,7 +229,7 @@ docs/                       bug reports and notes
 
 ## Not implemented yet
 
-- Incremental collection updates and batched writes (store traversals) for `SaveChanges`
+- Incremental collection updates for `SaveChanges` (a changed collection is rewritten as a whole)
 - A source generator for the mapper, for AOT/trimming
 - Clamped traversals
 - Mapping Fraction values

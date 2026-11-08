@@ -95,9 +95,16 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
   - `SaveChanges`: Beim Laden (`TrackChanges`, Standard an) legt der Kontext pro Objekt und Property einen Snapshot an (OOP, Wert, bei Collections die Elemente). Die geladenen OOPs hält er per `GciSaveObjs` (`GciSession.Retain`) im Export-Set, bis `Dispose`/`Clear` sie freigibt. Ohne das könnte die Gem temporäre Objekte zwischen Laden und Speichern einsammeln. Eine Wurzel, die der Aufrufer per `Load(Oop)` übergibt, hält dagegen der Aufrufer.
     - Geschrieben wird nur, was vom Snapshot abweicht: Entities werden nach Referenz verglichen, alles andere nach Wert.
     - Neue Objekte entstehen per `new` auf der GemStone-Klasse.
-    - Eine geänderte Collection wird als Ganzes in place neu befüllt (ein Block, dazu die Elemente als Array).
+    - Eine geänderte Collection wird als Ganzes in place neu befüllt.
     - Strings und Enums, die Symbols waren, bleiben Symbols. Enums werden als Symbol mit kleinem Anfangsbuchstaben geschrieben (`#frozen`).
     - Ein Commit gehört nicht dazu.
+    - **Geschrieben wird als ein Batch** (`SaveRun`): erst alles planen (Ops `1 class` = `new`, `2 target index value` = `instVarAt:put:`, `3 target items` = Inhalt ersetzen; Werte als Paar `kind payload`), dann `GciSession.StoreAndExecute`. Das sind `GciStoreTrav` (legt das Ops-Array, Strings, Utf8, Floats, ByteArrays mit vorab per `GciGetFreeOops` geholten OOPs an) und danach `GciExecuteStrFromContext` mit dem Ops-Array als `self` (`BatchSource`).
+      - Symbols, Nicht-ASCII-Strings (`Utf8` → `decodeToUnicode`), LargeInteger, ScaledDecimal, Date, Time und DateAndTime wandelt erst der Server um (`kind` 2–8). Das Ergebnis ist ein Array aus allen erzeugten Objekten, gefolgt von allen umgewandelten Werten, in der Reihenfolge der Auswertung. Der Client vergibt die Indizes in derselben Reihenfolge, in der er die Ops schreibt.
+      - Snapshots, Identity-Map und `_entries` ändern sich erst nach Erfolg (`_onSuccess`), siehe `AFailedBatchLeavesTheContextUnchanged`.
+      - Messwert: 300 Accounts mit 2.700 Änderungen und 300 neuen Orders brauchen 10 statt 7.509 GCI-Aufrufe. Davon sind 6 der Batch selbst (`ManyChangesCostAFewRoundTrips`).
+      - **Nicht `GciStoreTravDo_`** (ein Roundtrip weniger): Es meldet die geänderten Objekte und verlangt dafür `GciDirtyObjsInit`, also Dirty-Tracking für die ganze Session (sonst Fehler 2086, auch mit `alteredNumOops = 0`).
+      - Eine Store-Traversal ersetzt bei bestehenden Objekten *alle* Instanzvariablen (nicht übergebene werden nil). Deshalb legt sie nur neue Objekte an; bestehende ändert der Smalltalk-Code.
+    - `Oop.TryFromSmallDouble` ist die lokale Umkehrung von `GCI_OOP_TO_SMALL_DOUBLE`: Exponent 0x380–0x47F, aber 0x380 nur mit Bruchteil ≠ 0. Gegen `GciFltToOop` geprüft in `SmallDoubleEncodesLocallyLikeGciFltToOop`. `NewFloat` nutzt es auch.
   - `Stores` zählt auch die Instanzvariablen neu angelegter Objekte mit.
   - `Cast<DictionaryEntry>()` auf einem `IDictionary` liefert `KeyValuePair` (generischer Enumerator). Deshalb `IDictionary.GetEnumerator()` verwenden.
   - Die Session hält `Date`/`DateAndTime`/`Time` nach dem ersten Auflösen im Export-Set. Tests, die die Größe des Export-Sets messen, müssen alle beteiligten Pfade vorher einmal durchlaufen.

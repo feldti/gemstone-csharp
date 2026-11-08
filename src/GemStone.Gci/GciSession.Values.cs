@@ -16,7 +16,7 @@ namespace GemStone.Gci;
 public sealed partial class GciSession
 {
     private const int FetchChunkSize = 64 * 1024;
-    private static readonly int SmalltalkDateBase = new DateOnly(1901, 1, 1).DayNumber; // Date fromDays: 0
+    internal static readonly int SmalltalkDateBase = new DateOnly(1901, 1, 1).DayNumber; // Date fromDays: 0
     private Oop? _dateAndTimeClass, _dateClass, _timeClass;
 
     // ---- Integers ---------------------------------------------------------------------------
@@ -71,6 +71,7 @@ public sealed partial class GciSession
     /// <summary>SmallDouble, or a new Float (GciFltToOop).</summary>
     public Oop NewFloat(double value)
     {
+        if (Oop.TryFromSmallDouble(value, out var small)) return small; // no round trip
         lock (Sync)
         {
             Activate();

@@ -117,6 +117,33 @@ public readonly record struct Oop(ulong Value)
         return BitConverter.Int64BitsToDouble((long)result);
     }
 
+    /// <summary>
+    /// Inverse of <see cref="ToSmallDouble"/> (what GciFltToOop does locally): ±0 and doubles with
+    /// an exponent of 0x380–0x47F (about 6e-39 to 6e38) are SmallDoubles; everything else
+    /// (larger, smaller, NaN, infinities) needs a Float object.
+    /// </summary>
+    public static bool TryFromSmallDouble(double value, out Oop oop)
+    {
+        const ulong exponentBase = 0x380; // SMALL_DOUBLE_EXPONENT_BASE
+        var bits = (ulong)BitConverter.DoubleToInt64Bits(value);
+        var sign = bits >> 63;
+        var exponent = (bits >> 52) & 0x7FF;
+        var fraction = bits & 0xF_FFFF_FFFF_FFFF;
+        if (exponent == 0 && fraction == 0)
+        {
+            oop = new Oop((sign << 3) | TagSmallDouble);
+            return true;
+        }
+        // Exponent 0x380 only with a non-zero fraction: all-zero bits above the sign are ±0.
+        if (exponent < exponentBase || exponent > exponentBase + 0xFF || (exponent == exponentBase && fraction == 0))
+        {
+            oop = default;
+            return false;
+        }
+        oop = new Oop(((exponent - exponentBase) << 56) | (fraction << 4) | (sign << 3) | TagSmallDouble);
+        return true;
+    }
+
     /// <summary>GCI_BOOL_TO_OOP.</summary>
     public static Oop FromBoolean(bool value) => value ? True : False;
 

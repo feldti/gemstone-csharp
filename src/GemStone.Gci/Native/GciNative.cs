@@ -495,6 +495,28 @@ internal static unsafe partial class GciNative
     // All return TRUE when complete, FALSE if more reports follow (GciMoreTraversal) — or on
     // error, so GciErr must be checked after every call.
 
+    /// <summary>void GciGetFreeOops(int count, OopType *resultOops); — allocate OOPs for objects created later (store traversal).</summary>
+    public static void GciGetFreeOops(int count, ulong* resultOops)
+    {
+        ((delegate* unmanaged[Cdecl]<int, ulong*, void>)Fn(ref _GciGetFreeOops, "GciGetFreeOops"))(count, resultOops);
+    }
+    private static nint _GciGetFreeOops;
+
+    /// <summary>void GciStoreTrav(GciTravBufType *travBuff, int flag); — create/modify the objects of the reports (GCI_STORE_TRAV_*).</summary>
+    public static void GciStoreTrav(byte* travBuff, int flag)
+    {
+        ((delegate* unmanaged[Cdecl]<byte*, int, void>)Fn(ref _GciStoreTrav, "GciStoreTrav"))(travBuff, flag);
+    }
+    private static nint _GciStoreTrav;
+
+    /// <summary>OopType GciExecuteStrFromContext(const char source[], OopType contextObject, OopType symbolList); — execute with contextObject as self.</summary>
+    public static ulong GciExecuteStrFromContext(string source, ulong contextObject, ulong symbolList)
+    {
+        fixed (byte* sourceUtf8 = Utf8Z(source))
+        return ((delegate* unmanaged[Cdecl]<byte*, ulong, ulong, ulong>)Fn(ref _GciExecuteStrFromContext, "GciExecuteStrFromContext"))(sourceUtf8, contextObject, symbolList);
+    }
+    private static nint _GciExecuteStrFromContext;
+
     /// <summary>BoolType GciTraverseObjs(const OopType theOops[], int numOops, GciTravBufType *travBuff, int level);</summary>
     public static bool GciTraverseObjs(ulong* theOops, int numOops, byte* travBuff, int level)
     {
