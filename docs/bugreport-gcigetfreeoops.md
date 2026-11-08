@@ -125,6 +125,11 @@ GciGetFreeOops(150000, oops);
 | 250,000 | 100,000 OOPs, 150,000 entries are 0 |
 | 2 calls with 100,000 each | 200,000 distinct OOPs |
 
+The limit does not depend on the gem's temporary object cache: the results are the same with
+`GEM_TEMPOBJ_CACHE_SIZE` at 50 MB, 1 GB and 3 GB (set with `gemnetobject -T <KB>` in the gem
+service NRS, checked with `System gemConfigurationAt: #GemTempObjCacheSize`). It is also the same
+in 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6.
+
 Using such a 0 entry later as an object ID in `GciStoreTrav` (with `GCI_STORE_TRAV_CREATE`)
 fails with:
 
