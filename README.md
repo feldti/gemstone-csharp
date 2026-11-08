@@ -129,7 +129,7 @@ var accounts = ctx.Load<List<Account>>("UserGlobals at: #Accounts");
 
 accounts[0].Balance += 100m;
 accounts[0].Address = new Address { City = "Köln" };   // new object
-accounts[0].Orders.Add(new Order { Number = 42 });     // collection rewritten in place
+accounts[0].Orders.Add(new Order { Number = 42 });     // added to the existing collection
 ctx.SaveChanges();                                     // writes only what changed
 session.Commit();
 ```
@@ -156,8 +156,14 @@ Supported collection types:
 - Bag → `List<T>`
 - any AbstractDictionary → `Dictionary<K,V>`
 
-The mapper uses reflection, so it is not trimming- or AOT-safe yet. A changed collection is
-rewritten as a whole, and nested collections (`List<List<T>>`) cannot be saved yet.
+Changed collections are updated in place, not rewritten: only the elements that were removed,
+added or replaced change (`removeIndex:` / `add:beforeIndex:` for ordered collections, `remove:` /
+`add:` for sets and bags, `removeKey:` / `at:put:` for dictionaries). Elements the program didn't
+touch stay the same objects. Elements that were added on the server after loading, for example
+by Smalltalk code, are kept.
+
+The mapper uses reflection, so it is not trimming- or AOT-safe yet. Nested collections
+(`List<List<T>>`) cannot be saved yet.
 
 ## Building and testing
 
@@ -229,7 +235,6 @@ docs/                       bug reports and notes
 
 ## Not implemented yet
 
-- Incremental collection updates for `SaveChanges` (a changed collection is rewritten as a whole)
 - A source generator for the mapper, for AOT/trimming
 - Clamped traversals
 - Mapping Fraction values

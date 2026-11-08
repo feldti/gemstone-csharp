@@ -357,4 +357,141 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
         Assert.Throws<GciException>(() => ctx.SaveChanges()); // the changes are still pending
         Assert.Equal(10.50m, Eval<decimal>($"(UserGlobals at: #{key}) instVarNamed: 'amount'"));
     }
+
+    // ---- Incremental collection updates ------------------------------------------------------
+
+    /// <summary>A fresh holder whose 'items' is a <paramref name="collection"/> of 'a' 'b' 'c' 'd'.</summary>
+    private string NewHolder(string collection)
+    {
+        var key = "GsSaveTest_" + Guid.NewGuid().ToString("N");
+        S.Execute($$"""
+            | h items |
+            items := {{collection}}.
+            #('a' 'b' 'c' 'd') do: [:e | items add: e copy].
+            h := (UserGlobals at: #GsMapTestHolder) new.
+            h instVarNamed: 'items' put: items; instVarNamed: 'idSet' put: (IdentitySet withAll: (1 to: 10));
+              instVarNamed: 'big' put: 0; instVarNamed: 'when' put: DateAndTime now.
+            UserGlobals at: #{{key}} put: h.
+            true
+            """);
+        return key;
+    }
+
+    [StoneTheory]
+    [InlineData("OrderedCollection new", true)]
+    [InlineData("SortedCollection sortBlock: [:x :y | x <= y]", false)]
+    [InlineData("Bag new", false)]
+    public void ListChangesArePatched(string collection, bool ordered)
+    {
+        var key = NewHolder(collection);
+        var items = $"((UserGlobals at: #{key}) instVarNamed: 'items')";
+        using var ctx = new GsObjectContext(S);
+        var h = ctx.Load<Holder>($"UserGlobals at: #{key}");
+        var before = ordered ? new[] { "a", "b", "c", "d" } : [.. h.Items!.Cast<string>()]; // Bag: any order
+        Assert.Equal(["a", "b", "c", "d"], before.OrderBy(x => x, StringComparer.Ordinal));
+        var keptOop = Eval<long>($"({items} detect: [:e | e = '{before[2]}']) asOop");
+
+        var list = h.Items!;
+        list.RemoveAt(1);           // remove an element in the middle
+        list.Insert(1, "x");        // and put a new one there
+        list.Insert(0, "Ä");        // non-ASCII at the front
+        list.Add("z");              // append
+        Assert.Equal(1, ctx.SaveChanges());
+        Assert.Equal(0, ctx.SaveChanges());
+
+        var server = Eval<string>($"{items} inject: '' into: [:acc :e | acc , e , ' ']").TrimEnd();
+        var expected = list.Cast<string>().ToList();
+        if (ordered) Assert.Equal(string.Join(" ", expected), server);
+        else Assert.Equal(expected.OrderBy(x => x, StringComparer.Ordinal), server.Split(' ').OrderBy(x => x, StringComparer.Ordinal));
+        Assert.True(Eval<bool>($"({items} detect: [:e | e = '{before[2]}']) asOop = {keptOop}")); // untouched: same object
+    }
+
+    [StoneFact]
+    public void ArrayChangesKeepTheArray()
+    {
+        var key = "GsSaveTest_" + Guid.NewGuid().ToString("N");
+        S.Execute($"| h | h := (UserGlobals at: #GsMapTestHolder) new. h instVarNamed: 'items' put: #(1 2 3) copy; instVarNamed: 'big' put: 0; instVarNamed: 'when' put: DateAndTime now. UserGlobals at: #{key} put: h. true");
+        var items = $"((UserGlobals at: #{key}) instVarNamed: 'items')";
+        var arrayOop = Eval<long>($"{items} asOop");
+        using var ctx = new GsObjectContext(S);
+        var h = ctx.Load<Holder>($"UserGlobals at: #{key}");
+
+        h.Items![1] = "two"; // same size
+        ctx.SaveChanges();
+        Assert.Equal("1 two 3", Eval<string>($"{items} inject: '' into: [:acc :e | acc , e asString , ' ']").TrimEnd());
+
+        h.Items.RemoveAt(0);  // smaller
+        h.Items.AddRange([4L, 5L, 6L]);
+        ctx.SaveChanges();
+        Assert.Equal("two 3 4 5 6", Eval<string>($"{items} inject: '' into: [:acc :e | acc , e asString , ' ']").TrimEnd());
+        Assert.Equal(arrayOop, Eval<long>($"{items} asOop"));
+        Assert.Equal("Array", Eval<string>($"{items} class name"));
+    }
+
+    [StoneFact]
+    public void ServerSideChangesToOtherElementsSurvive()
+    {
+        // A collection is no longer rewritten as a whole: elements the context did not touch, and
+        // even elements added on the server after loading, stay.
+        var key = NewAccount();
+        var acc = $"(UserGlobals at: #{key})";
+        using var ctx = new GsObjectContext(S);
+        var a = ctx.Load<Account>($"UserGlobals at: #{key}");
+        S.Execute($$"""
+            {{acc}} instVarNamed: 'tags' put: (({{acc}} instVarNamed: 'tags') add: 'server'; yourself).
+            (({{acc}} instVarNamed: 'orderList') first instVarNamed: 'lines') at: 'server' put: 1.
+            ({{acc}} instVarNamed: 'orderList') add: (UserGlobals at: #GsMapTestOrder) new.
+            true
+            """);
+
+        a.Tags.Add("client");
+        a.Tags.Remove("a");
+        a.Orders[0].Lines!["apple"] = 30;
+        a.Orders[0].Lines!["kiwi"] = 2;
+        a.Orders.Insert(0, new Order { Number = 7 });
+        Assert.Equal(3, ctx.SaveChanges() - 4); // 3 collections; 4 instVars of the new order
+
+        Assert.Equal("b client server", Eval<string>($"(({acc} instVarNamed: 'tags') asSortedCollection: [:x :y | x <= y]) inject: '' into: [:s :e | s isEmpty ifTrue: [e] ifFalse: [s, ' ', e]]"));
+        var lines = $"((({acc} instVarNamed: 'orderList') at: 2) instVarNamed: 'lines')";
+        Assert.Equal(30, Eval<long>($"{lines} at: 'apple'"));
+        Assert.Equal(2, Eval<long>($"{lines} at: 'kiwi'"));
+        Assert.Equal(1, Eval<long>($"{lines} at: 'server'"));
+        Assert.Equal(3, Eval<long>($"({acc} instVarNamed: 'orderList') size")); // new, loaded, server-added
+        Assert.Equal(7, Eval<long>($"({acc} instVarNamed: 'orderList') first instVarNamed: 'number'"));
+    }
+
+    [StoneFact]
+    public void DictionaryAndIdentitySetChangesArePatched()
+    {
+        var key = NewHolder("OrderedCollection new");
+        var holder = $"(UserGlobals at: #{key})";
+        using var ctx = new GsObjectContext(S);
+        var h = ctx.Load<Holder>($"UserGlobals at: #{key}");
+        h.IdSet!.Remove(3);
+        h.IdSet.Add(5000);
+        h.IdSet.Add(1L << 62); // LargeInteger
+        Assert.Equal(1, ctx.SaveChanges());
+        Assert.Equal(11, Eval<long>($"({holder} instVarNamed: 'idSet') size"));
+        Assert.True(Eval<bool>($"(({holder} instVarNamed: 'idSet') includes: 5000) and: [(({holder} instVarNamed: 'idSet') includes: 3) not]"));
+        Assert.True(Eval<bool>($"({holder} instVarNamed: 'idSet') anySatisfy: [:x | x = (2 raisedTo: 62)]")); // a LargeInteger: equal, not identical
+        Assert.Equal("IdentitySet", Eval<string>($"({holder} instVarNamed: 'idSet') class name"));
+
+        var order = new GsObjectContext(S);
+        using (order)
+        {
+            var accountKey = NewAccount();
+            var lines = $"(((UserGlobals at: #{accountKey}) instVarNamed: 'orderList') first instVarNamed: 'lines')";
+            var dictOop = Eval<long>($"{lines} asOop");
+            var o = order.Load<Account>($"UserGlobals at: #{accountKey}").Orders[0];
+            o.Lines!.Remove("apple");
+            o.Lines["pear"] = 4;
+            Assert.Equal(1, order.SaveChanges());
+            Assert.Equal(dictOop, Eval<long>($"{lines} asOop"));
+            Assert.Equal(1, Eval<long>($"{lines} size"));
+            Assert.Equal(4, Eval<long>($"{lines} at: 'pear'"));
+            o.Lines.Clear();
+            Assert.Equal(1, order.SaveChanges());
+            Assert.Equal(0, Eval<long>($"{lines} size"));
+        }
+    }
 }

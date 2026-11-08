@@ -95,7 +95,11 @@ dotnet run --project samples/GsRepl -- -e "3 + 4"     # einmalig auswerten
   - `SaveChanges`: Beim Laden (`TrackChanges`, Standard an) legt der Kontext pro Objekt und Property einen Snapshot an (OOP, Wert, bei Collections die Elemente). Die geladenen OOPs hält er per `GciSaveObjs` (`GciSession.Retain`) im Export-Set, bis `Dispose`/`Clear` sie freigibt. Ohne das könnte die Gem temporäre Objekte zwischen Laden und Speichern einsammeln. Eine Wurzel, die der Aufrufer per `Load(Oop)` übergibt, hält dagegen der Aufrufer.
     - Geschrieben wird nur, was vom Snapshot abweicht: Entities werden nach Referenz verglichen, alles andere nach Wert.
     - Neue Objekte entstehen per `new` auf der GemStone-Klasse.
-    - Eine geänderte Collection wird als Ganzes in place neu befüllt.
+    - Eine geänderte Collection wird in place gepatcht, nicht neu befüllt (Diff gegen den Snapshot):
+      - geordnet (`List`/Array-Shape): gemeinsamer Anfang und gemeinsames Ende bleiben, die Mitte wird ersetzt. Op `4 target from removed inserted`; der Server nimmt `removeIndex:`/`add:beforeIndex:`. Bei SortedCollection, Bag und `from = 0` nimmt er `remove:ifAbsent:`/`addAll:`, bei Array den Umweg über eine OrderedCollection-Kopie plus `size:`.
+      - ungeordnet (Set-Shape): Multiset-Abgleich, Op 4 mit `from = 0`.
+      - Dictionary: Op `5 target removedKeys puts`. Bestehende Schlüssel behalten ihr Objekt (Symbol bleibt Symbol).
+      - Folge: Nicht angefasste Elemente bleiben dieselben Objekte, und was andere nach dem Laden ergänzt haben, bleibt erhalten (`ServerSideChangesToOtherElementsSurvive`). Op 3 (befüllen) gibt es nur noch für neu angelegte Collections.
     - Strings und Enums, die Symbols waren, bleiben Symbols. Enums werden als Symbol mit kleinem Anfangsbuchstaben geschrieben (`#frozen`).
     - Ein Commit gehört nicht dazu.
     - **Geschrieben wird als ein Batch** (`SaveRun`): erst alles planen (Ops `1 class` = `new`, `2 target index value` = `instVarAt:put:`, `3 target items` = Inhalt ersetzen; Werte als Paar `kind payload`), dann `GciSession.StoreAndExecute`. Das sind `GciStoreTrav` (legt das Ops-Array, Strings, Utf8, Floats, ByteArrays mit vorab per `GciGetFreeOops` geholten OOPs an) und danach `GciExecuteStrFromContext` mit dem Ops-Array als `self` (`BatchSource`).
