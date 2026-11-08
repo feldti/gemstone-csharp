@@ -2,13 +2,15 @@
 
   <PropertyGroup>
     <!--
-      net10.0 and net8.0 always (both runtimes must be installed).
+      net10.0 and net8.0 (both runtimes must be installed); on arm64 net10.0 only.
       net48: the same tests against the .NET Framework build. On Windows always; elsewhere only with
       -p:WithNet48Tests=true (dotnet test cannot host net48 there; use tests/Net48Runner with Mono).
     -->
     <TargetFramework></TargetFramework>
     <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows')) or '$(WithNet48Tests)' == 'true'">net10.0;net8.0;net48</TargetFrameworks>
+    <!-- On arm64 (Raspberry Pi, Apple Silicon) the library supports .NET 10 only. -->
+    <TargetFrameworks Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">net10.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>

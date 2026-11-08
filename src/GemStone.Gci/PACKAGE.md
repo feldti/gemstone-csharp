@@ -19,8 +19,8 @@ classic (non-thread-safe) **GemBuilder for C** (GCI, `libgcirpc`).
 - The GemStone client library (`libgcirpc-3.x.y-64.so` / `.dll`) is **not** part of this
   package. It is found through `GEMSTONE_GCI_LIBRARY` (full path), `$GEMSTONE/lib` or
   `$GEMSTONE/bin`, the application directory, or the OS library search.
-- 64-bit processes only: Linux x86-64, Linux arm64 with .NET 10 only (GemStone 3.7 and later,
-  e.g. a Raspberry Pi with a 64-bit OS) and Windows x64. For .NET Framework applications, set the platform target
+- 64-bit processes only: Linux x86-64 and Windows x64; with .NET 10 only, also Linux arm64
+  (e.g. a Raspberry Pi with a 64-bit OS) and macOS on Apple Silicon (GemStone 3.7 and later). For .NET Framework applications, set the platform target
   to `x64`, or turn off "Prefer 32-bit".
 
 ## Quick start

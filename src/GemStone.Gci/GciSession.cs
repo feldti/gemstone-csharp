@@ -62,12 +62,12 @@ public sealed partial class GciSession : IDisposable
         {
             if (_initialized) return;
             // GemStone/S 64 Bit only ships 64-bit client libraries: x86-64 (Linux, Windows) and,
-            // since 3.7, arm64 (Linux, e.g. Raspberry Pi with a 64-bit OS; GemTalk: for
-            // development; here with .NET 10 only). Fail with a clear message instead of a
+            // since 3.7, arm64 (Linux, e.g. Raspberry Pi with a 64-bit OS, and macOS on Apple
+            // Silicon; GemTalk: for development; here with .NET 10 only). Fail with a clear message instead of a
             // BadImageFormatException.
             if (!Environment.Is64BitProcess)
                 throw new PlatformNotSupportedException(
-                    "GemStone/S 64 Bit client libraries require a 64-bit process (x64, or arm64 on Linux).");
+                    "GemStone/S 64 Bit client libraries require a 64-bit process (x64, or arm64 on Linux and macOS).");
             CheckArm64();
             if (!GciNative.GciInit())
                 throw new GciException("GciInit failed");
@@ -75,17 +75,18 @@ public sealed partial class GciSession : IDisposable
         }
     }
 
-    // arm64 only on Linux (GemStone has no arm64 Windows client) and only with the net10.0 build:
-    // .NET 10 is the first version that properly supports the Raspberry Pi.
+    // arm64 only on Linux and macOS (Apple Silicon; GemStone has no arm64 Windows client), and
+    // only with the net10.0 build: .NET 10 is the first version that properly supports the
+    // Raspberry Pi. GemTalk supports both arm64 platforms for development only.
     private static void CheckArm64()
     {
         if (RuntimeInformation.ProcessArchitecture != Architecture.Arm64) return;
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             throw new PlatformNotSupportedException(
-                "GemStone/S 64 Bit has arm64 client libraries for Linux only; on Windows, use an x64 process.");
+                "GemStone/S 64 Bit has no arm64 client libraries for Windows; use an x64 process.");
 #if !NET10_0_OR_GREATER
         throw new PlatformNotSupportedException(
-            "On Linux arm64 (e.g. Raspberry Pi), GemStone.Gci supports .NET 10 only; target net10.0.");
+            "On arm64 (Linux, e.g. Raspberry Pi, or macOS on Apple Silicon), GemStone.Gci supports .NET 10 only; target net10.0.");
 #endif
     }
 

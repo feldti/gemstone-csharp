@@ -6,6 +6,7 @@
     Publish a single self-contained executable (no .NET install needed on the target):
       dotnet publish samples/GsRepl -r linux-x64
       dotnet publish samples/GsRepl -r linux-arm64   (Raspberry Pi with a 64-bit OS)
+      dotnet publish samples/GsRepl -r osx-arm64     (macOS on Apple Silicon)
       dotnet publish samples/GsRepl -r win-x64
     The GemStone client libraries are NOT bundled; set GEMSTONE on the target machine or
     copy libgcirpc-*.so / libgcirpc-*.dll (and their dependencies) next to the executable.
@@ -18,8 +19,8 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- No GemStone.Gci.xml (IntelliSense docs) next to the published executable. -->
     <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
-    <!-- GemStone/S 64 Bit client libraries: 64-bit only; arm64 for Linux since 3.7 (with .NET 10 only). -->
-    <RuntimeIdentifiers>linux-x64;linux-arm64;win-x64</RuntimeIdentifiers>
+    <!-- GemStone/S 64 Bit client libraries: 64-bit only; arm64 for Linux and macOS since 3.7 (with .NET 10 only). -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64;osx-arm64;win-x64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">

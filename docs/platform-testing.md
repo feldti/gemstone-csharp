@@ -1,4 +1,4 @@
-# Testing on Windows and on Linux arm64 (Raspberry Pi)
+# Testing on Windows, Linux arm64 (Raspberry Pi) and macOS (Apple Silicon)
 
 The test suite runs on Linux x86-64 against GemStone 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6, for
 .NET 10, .NET 8 and (with Mono) .NET Framework 4.8.
@@ -8,7 +8,8 @@ with the GemStone 3.7.6 Windows client against a stone on Linux (Windows 11 25H2
 The first run found a bug in the Windows client library (`GciGetFreeOops`, see the README).
 Not tested yet: the further checks below (gsrepl, running without `GEMSTONE`, WinForms, 32 bit).
 
-Linux arm64 is supported with .NET 10 only and has not been tested yet.
+Linux arm64 and macOS on Apple Silicon are supported with .NET 10 only and have not been tested
+yet. On arm64, the test project builds for net10.0 only.
 
 ## Windows x64 (client)
 
@@ -86,7 +87,7 @@ supports the Raspberry Pi. An application built for net8.0 stops at the first lo
 |---|---|
 | Raspberry Pi 4 or 5 (8 GB recommended for a stone; a client alone needs much less) | Pi 3 works as a pure client |
 | A **64-bit** OS: Raspberry Pi OS (64-bit) or Ubuntu Server arm64 | `uname -m` must print `aarch64`; a 32-bit OS cannot load the library |
-| GemStone/S 64 Bit 3.7.x for Linux arm64 | From GemTalk. Either a whole server on the Pi, or just its client library for a stone elsewhere, **same version as the stone** |
+| GemStone/S 64 Bit 3.7.x for Linux arm64 | From GemTalk, as a zip (`linux/arm64`, unpack anywhere, no root needed; best for tests) or as a Debian package (`linux apt/arm64`, installed with `apt`, needs root). Either a whole server on the Pi, or just its client library for a stone elsewhere, **same version as the stone** |
 | .NET 10 SDK for arm64 | e.g. with `dotnet-install.sh` (https://dot.net/v1/dotnet-install.sh) |
 
 .NET 8 and .NET Framework 4.8 (net48, Windows-only) are not supported on arm64, nor is Mono.
@@ -98,7 +99,7 @@ git clone https://github.com/feldti/gemstone-csharp.git && cd gemstone-csharp
 export GEMSTONE=/opt/gemstone/GemStone64Bit3.7.x-arm64.Linux     # the arm64 product directory
 export GS_TEST_STONE=gs64stone GS_TEST_GEM_SERVICE='!@localhost#netldi:gs64ldi!gemnetobject'
 export GS_TEST_USER=DataCurator GS_TEST_PASSWORD=swordfish
-dotnet test -f net10.0     # net8.0 is not supported on arm64
+dotnet test                # builds and runs net10.0 only on arm64
 ```
 
 Or without an SDK on the Pi: publish the console on another machine and copy it over:
@@ -121,3 +122,53 @@ convention. Worth watching:
   `ScalarValuesSurviveABatchedSave` compare the local encoding with the server's;
 - performance on a Pi: `SessionsExecuteInParallel` expects two parallel one-second waits to
   finish within 0.95–1.7 s, which may be tight on a busy Pi.
+
+## macOS (Apple Silicon)
+
+Unlike Windows, GemTalk ships the **whole product** for macOS (download `3.7.x/silicon`): stone,
+gems and NetLDI run on the Mac itself, so the test suite runs against a local stone, as on Linux.
+GemTalk supports GemStone on macOS for **development use only**. As on Linux arm64, this project supports **.NET 10 only** there.
+
+### What you need
+
+| What | Notes |
+|---|---|
+| A Mac with Apple Silicon (M1 or later) | macOS version as listed in GemTalk's installation guide for the Mac |
+| GemStone/S 64 Bit 3.7.x for Mac (`silicon`) | Install it as described in GemTalk's installation guide (*Installing GemStone/S 64 Bit on Mac*); it also covers the shared memory settings for the stone |
+| .NET 10 SDK for Arm64 (macOS installer) | https://dotnet.microsoft.com/download |
+| Git | e.g. `xcode-select --install` |
+
+### Running the tests
+
+Create and start a stone and a NetLDI as the installation guide describes. Start the NetLDI with
+`LC_NUMERIC=C` and in guest mode, like the Linux test stones:
+
+```bash
+export GEMSTONE=/path/to/GemStone64Bit3.7.6-arm64.Darwin   # the product directory
+export PATH=$GEMSTONE/bin:$PATH
+startstone gs64stone
+LC_NUMERIC=C startnetldi -g -a $USER gs64ldi
+
+git clone https://github.com/feldti/gemstone-csharp.git && cd gemstone-csharp
+export GS_TEST_STONE=gs64stone GS_TEST_GEM_SERVICE='!@localhost#netldi:gs64ldi!gemnetobject'
+export GS_TEST_USER=DataCurator GS_TEST_PASSWORD=swordfish
+dotnet test                # net10.0 only on arm64
+```
+
+The directory name above is an example; use the one from the download.
+
+### What could differ on macOS
+
+- **The library file:** the wrapper looks for `libgcirpc-*-64.dylib` in `$GEMSTONE/lib`. If the
+  Mac product names or places it differently, the tests fail at the first login with "library
+  not found"; please report the actual name.
+- **Libraries that `libgcirpc` loads itself** (on Linux: `libssl`, `libkrb5`): the wrapper loads
+  `libgcirpc` by its absolute path, but how it finds its own dependencies on macOS is not
+  verified.
+- **Quarantine:** files downloaded with a browser carry the quarantine attribute, and macOS may
+  refuse to load the libraries ("cannot be opened because the developer cannot be verified").
+  Removing it from the product directory helps: `xattr -dr com.apple.quarantine $GEMSTONE`.
+- **gsrepl:** on Apple Silicon every executable must be signed, at least ad hoc. Best publish it
+  on the Mac itself (`dotnet publish samples/GsRepl -c Release -r osx-arm64`). If it was built
+  elsewhere and does not start, sign it ad hoc: `codesign --force -s - gsrepl`.
+- **`SessionsExecuteInParallel`** measures time and may be tight on a busy machine, as on the Pi.
