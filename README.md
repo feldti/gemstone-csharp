@@ -170,7 +170,32 @@ when it moves within the outer collection; its contents are updated in place as 
 instance becomes a new GemStone collection (OrderedCollection, Array, Set or KeyValueDictionary,
 by its C# type).
 
-The mapper uses reflection, so it is not trimming- or AOT-safe yet.
+#### Without reflection: the source generator
+
+The package brings a source generator. In every project with `[GsClass]` types, it writes the
+class `GemStone.Gci.Generated.GsGeneratedMappings` with all mapping metadata as plain code. Pass
+it to the context, and the mapper needs no reflection, so trimmed and native AOT applications
+work:
+
+```csharp
+using GemStone.Gci.Generated;
+
+using var ctx = new GsObjectContext(session, GsGeneratedMappings.Default);
+```
+
+`new GsObjectContext(session)` keeps using reflection; the compiler warns about it in trimmed
+and AOT projects (IL2026/IL3050). The generator covers:
+- all `[GsClass]` types of the project and their C# subclasses,
+- the types of their mapped properties (collections, nested collections),
+- the `T` of `Load<T>` calls and of `Validate(typeof(T))`.
+
+A type the generator never saw, for example only used as `Load<T>` inside generic code, makes
+`Load` fail with a message saying so. Private setters, `init` setters and non-public
+constructors work: on .NET 8 and later through `UnsafeAccessor`, on .NET Framework through
+reflection. Mapping errors it can see at compile time (no setter, no parameterless
+constructor, `[GsOop]` on a property that isn't an `Oop`, an unsuitable converter) appear as
+warnings `GSGEN002`; types it cannot handle (private nested, generic) as `GSGEN001`. Tested
+with a native AOT build (.NET 10) that loads objects and saves changes.
 
 ## Building and testing
 
@@ -259,14 +284,15 @@ Other differences from the manual, taken from the 3.7.5 headers:
 src/GemStone.Gci/           the library
   Native/                   raw P/Invoke layer (internal), struct mirrors, library resolver
   Mapping/                  attribute-based object mapper (load + SaveChanges)
+  GemStone.Gci.Generators/  source generator for the mapper (shipped in the package)
 tests/GemStone.Gci.Tests/   unit tests and integration tests ([StoneFact])
+tests/GemStone.Gci.Generators.Tests/  unit tests of the source generator
 samples/GsRepl/             interactive console (separate solution)
 docs/                       bug reports and notes
 ```
 
 ## Not implemented yet
 
-- A source generator for the mapper, for AOT/trimming
 - Clamped traversals
 - Mapping Fraction values
 - `GciContinue` after errors

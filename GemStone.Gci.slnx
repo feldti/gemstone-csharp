@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/GemStone.Gci/GemStone.Gci.csproj" />
+    <Project Path="src/GemStone.Gci.Generators/GemStone.Gci.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/GemStone.Gci.Tests/GemStone.Gci.Tests.csproj" />
+    <Project Path="tests/GemStone.Gci.Generators.Tests/GemStone.Gci.Generators.Tests.csproj" />
   </Folder>
 </Solution>

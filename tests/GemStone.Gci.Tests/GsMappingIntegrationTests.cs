@@ -1,4 +1,5 @@
 using System.Numerics;
+using GemStone.Gci.Generated;
 using GemStone.Gci.Mapping;
 
 namespace GemStone.Gci.Tests.Mapping;
@@ -166,15 +167,25 @@ public sealed class MappingFixture : IDisposable
     }
 }
 
+/// <summary>The same tests with the metadata of the source generator instead of reflection.</summary>
 [Collection("Stone")]
-public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFixture<MappingFixture>
+public sealed class GsMappingGeneratedIntegrationTests(MappingFixture fixture) : GsMappingIntegrationTests(fixture)
 {
-    private GciSession S => fixture.Session!;
+    protected override GsObjectContext NewContext() => new(S, GsGeneratedMappings.Default);
+}
+
+[Collection("Stone")]
+public class GsMappingIntegrationTests(MappingFixture fixture) : IClassFixture<MappingFixture>
+{
+    protected GciSession S => fixture.Session!;
+
+    /// <summary>The context under test: mapping metadata by reflection here, generated in the subclass.</summary>
+    protected virtual GsObjectContext NewContext() => new(S);
 
     [StoneFact]
     public void LoadsGraphWithRenamedInstVarsSubclassesAndCycles()
     {
-        var ctx = new GsObjectContext(S);
+        var ctx = NewContext();
         var accounts = ctx.Load<List<Account>>("UserGlobals at: #GsMapTestAccounts");
 
         Assert.Equal(3, accounts.Count);
@@ -216,8 +227,8 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     [StoneFact]
     public void DepthIsOnlyAPerformanceSetting()
     {
-        var shallow = new GsObjectContext(S).Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", new GsLoadOptions { Depth = 1 });
-        var deep = new GsObjectContext(S).Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", new GsLoadOptions { Depth = 10 });
+        var shallow = NewContext().Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", new GsLoadOptions { Depth = 1 });
+        var deep = NewContext().Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", new GsLoadOptions { Depth = 10 });
 
         Assert.Equal(deep.Select(a => a.Name), shallow.Select(a => a.Name));
         Assert.Equal("Köln", shallow[0].Address!.City);
@@ -228,7 +239,7 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     [StoneFact]
     public void LoadsCollectionsDictionariesConvertersAndServerConvertedValues()
     {
-        var h = new GsObjectContext(S).Load<Holder>("UserGlobals at: #GsMapTestHolderObj");
+        var h = NewContext().Load<Holder>("UserGlobals at: #GsMapTestHolderObj");
 
         Assert.Equal([1L, "two", 3.5, null], h.Items!);
         Assert.Equal(2000, h.IdSet!.Count);                 // NSC read directly
@@ -245,9 +256,9 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     public void ServerConvertedValuesAreBatched()
     {
         // 3000 Balances (SmallScaledDecimal) used to cost several round trips each.
-        using (var warm = new GsObjectContext(S)) warm.Load<Account[]>("UserGlobals at: #GsMapTestMany");
+        using (var warm = NewContext()) warm.Load<Account[]>("UserGlobals at: #GsMapTestMany");
         var before = S.CallCount;
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var many = ctx.Load<Account[]>("UserGlobals at: #GsMapTestMany", new GsLoadOptions { TrackChanges = false });
         var calls = S.CallCount - before;
 
@@ -259,7 +270,7 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     [StoneFact]
     public void ManyObjectsAcrossSeveralBuffers()
     {
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var many = ctx.Load<Account[]>("UserGlobals at: #GsMapTestMany", new GsLoadOptions { BufferSize = 16 * 1024 });
 
         Assert.Equal(3000, many.Length);
@@ -271,7 +282,7 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     [StoneFact]
     public void ReloadRefreshesTheSameInstance()
     {
-        var ctx = new GsObjectContext(S);
+        var ctx = NewContext();
         var first = ctx.Load<Order>("UserGlobals at: #GsMapTestOrderNoLines");
         S.Execute("(UserGlobals at: #GsMapTestOrderNoLines) instVarNamed: 'total' put: 8.5");
         try
@@ -289,7 +300,7 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     [StoneFact]
     public void ValidationListsAllProblemsWithSuggestions()
     {
-        var ctx = new GsObjectContext(S);
+        var ctx = NewContext();
         var e = Assert.Throws<GsMappingException>(() => ctx.Validate(typeof(AddressWithTypo)));
         Assert.Equal(2, e.Problems.Count);
         Assert.Contains(e.Problems, p => p.Contains("'stret'") && p.Contains("did you mean 'street'"));
@@ -304,7 +315,7 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     [StoneFact]
     public void DataThatDoesNotFitTheMappingIsReported()
     {
-        var ctx = new GsObjectContext(S);
+        var ctx = NewContext();
 
         var kind = Assert.Throws<GsMappingException>(() => ctx.Load<OrderWithWrongKind>("((UserGlobals at: #GsMapTestAccounts) first instVarNamed: 'orderList') first"));
         Assert.Contains("KeyValueDictionary", kind.Message);
@@ -331,7 +342,7 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
     {
         long Size() => S.Evaluate<long>("System hiddenSetSize: (System HiddenSetSpecifiers indexOf: 'PureExportSet')");
         // Warm up caches (the session resolves Date/DateAndTime once and keeps them).
-        using (var warm = new GsObjectContext(S))
+        using (var warm = NewContext())
         {
             warm.Load<Holder>("UserGlobals at: #GsMapTestHolderObj");
             warm.Load<List<Account>>("UserGlobals at: #GsMapTestAccounts");
@@ -339,17 +350,17 @@ public sealed class GsMappingIntegrationTests(MappingFixture fixture) : IClassFi
         var before = Size();
         for (var i = 0; i < 5; i++)
         {
-            using (var ctx = new GsObjectContext(S))
+            using (var ctx = NewContext())
                 ctx.Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", new GsLoadOptions { Depth = 1 });
-            using (var ctx = new GsObjectContext(S))
+            using (var ctx = NewContext())
                 ctx.Load<Holder>("UserGlobals at: #GsMapTestHolderObj");
         }
         Assert.Equal(before, Size());
 
         // Without change tracking nothing is held, even without Dispose.
         var readOnly = new GsLoadOptions { TrackChanges = false };
-        new GsObjectContext(S).Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", readOnly);
-        new GsObjectContext(S).Load<Holder>("UserGlobals at: #GsMapTestHolderObj", readOnly);
+        NewContext().Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", readOnly);
+        NewContext().Load<Holder>("UserGlobals at: #GsMapTestHolderObj", readOnly);
         Assert.Equal(before, Size());
     }
 }

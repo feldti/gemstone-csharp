@@ -20,7 +20,7 @@
          Alliance's unrelated Gemstone libraries; package IDs ignore case). The namespace stays GemStone.Gci. -->
     <PackageId>Gs64Net.Gci</PackageId>
     <Title>GemStone/S 64 Bit client for .NET (classic GCI)</Title>
-    <Description>Work in progress. A .NET 10, .NET 8 and .NET Framework 4.8 wrapper for GemStone/S 64 Bit 3.6 and 3.7, built on the classic GemBuilder for C (libgcirpc): sessions, Smalltalk execution, value conversion, transactions, traversals, async calls and an attribute-based object mapper with change tracking. The GemStone client library is not included; it comes from a GemStone installation. 64-bit processes only: Linux x86-64, Windows x64, and with .NET 10 only Linux arm64 and macOS on Apple Silicon.</Description>
+    <Description>Work in progress. A .NET 10, .NET 8 and .NET Framework 4.8 wrapper for GemStone/S 64 Bit 3.6 and 3.7, built on the classic GemBuilder for C (libgcirpc): sessions, Smalltalk execution, value conversion, transactions, traversals, async calls and an attribute-based object mapper with change tracking (with a source generator for trimming and native AOT). The GemStone client library is not included; it comes from a GemStone installation. 64-bit processes only: Linux x86-64, Windows x64, and with .NET 10 only Linux arm64 and macOS on Apple Silicon.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageReleaseNotes>First preview. APIs may still change.</PackageReleaseNotes>
     <!-- XML docs for IntelliSense; not every public member has a comment yet. -->
@@ -32,6 +32,13 @@
 
   <ItemGroup>
     <None Include="PACKAGE.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <!-- The mapping source generator travels in this package (analyzers/dotnet/cs); it is not a dependency of the library itself. -->
+  <ItemGroup>
+    <ProjectReference Include="..\GemStone.Gci.Generators\GemStone.Gci.Generators.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="..\GemStone.Gci.Generators\bin\$(Configuration)\netstandard2.0\GemStone.Gci.Generators.dll"
+          Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' != 'net48'">

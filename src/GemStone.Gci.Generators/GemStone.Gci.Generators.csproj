@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Source generator for the object mapper: emits GemStone.Gci.Generated.GsGeneratedMappings
+    (mapping metadata without reflection) into projects with [GsClass] types. Shipped inside the
+    Gs64Net.Gci package (analyzers/dotnet/cs), not as a package of its own.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <!-- RS2008: release tracking of diagnostic IDs (analyzer packages only). -->
+    <NoWarn>$(NoWarn);RS2008</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 4.8 = Visual Studio 2022 17.8 / .NET 8 SDK: the oldest compiler that has to run the generator. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

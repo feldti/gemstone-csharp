@@ -12,7 +12,10 @@ classic (non-thread-safe) **GemBuilder for C** (GCI, `libgcirpc`).
 - Transactions with conflict detection and retry
 - Traversals: whole object graphs in one round trip
 - Object mapper: load GemStone objects into your own attributed C# classes, change them and
-  write the changes back in one batch with `SaveChanges`
+  write the changes back in one batch with `SaveChanges`. A source generator in this package
+  writes the mapping metadata at compile time (`GemStone.Gci.Generated.GsGeneratedMappings`),
+  for trimmed and native AOT applications:
+  `new GsObjectContext(session, GsGeneratedMappings.Default)`
 
 ## Requirements
 

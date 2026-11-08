@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -321,8 +320,6 @@ public sealed partial class GsObjectContext : IDisposable
     /// everything at once (<see cref="GciSession.StoreAndExecute"/>). Snapshots and the identity
     /// map change only after the batch succeeded.
     /// </summary>
-    [RequiresUnreferencedCode("The object mapper inspects mapped types by reflection.")]
-    [RequiresDynamicCode("The object mapper creates generic collection types at runtime.")]
     private sealed class SaveRun(GsObjectContext ctx)
     {
         private readonly GciSession _session = ctx._session;
@@ -354,7 +351,7 @@ public sealed partial class GsObjectContext : IDisposable
                 ctx._identity[resolved] = entity;
                 ctx._oops[entity] = resolved;
                 ctx._entries[entity] = entry[0] = new EntityEntry(entity, resolved, map);
-                map.OopProperty?.SetValue(entity, resolved);
+                map.SetOop?.Invoke(entity, resolved);
             });
             Update(target, () => entry[0]);
             return oop;
@@ -377,7 +374,7 @@ public sealed partial class GsObjectContext : IDisposable
             foreach (var p in target.Map.Properties)
             {
                 if (p.ReadOnly) continue;
-                var current = p.Property.GetValue(target.Entity);
+                var current = p.Get(target.Entity);
                 var snap = target.Snapshot(p);
 
                 if (p.Converter is null && p.Shape.IsCollection)
@@ -617,7 +614,7 @@ public sealed partial class GsObjectContext : IDisposable
         {
             if (property?.Converter is { } converter)
                 return converter is IGsTwoWayConverter twoWay
-                    ? Scalar(twoWay.ToGemStone(value, property.Property.PropertyType), snap, where)
+                    ? Scalar(twoWay.ToGemStone(value, property.PropertyType), snap, where)
                     : throw new NotSupportedException($"{where}: {converter.GetType().Name} cannot convert values back to GemStone (implement IGsTwoWayConverter).");
             if (value is null) return BatchValue.Of(Oop.Nil);
             return shape.Kind switch

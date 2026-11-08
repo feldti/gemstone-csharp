@@ -58,12 +58,11 @@ public sealed class GsMappingException(string message, IReadOnlyList<string> pro
 /// or <see cref="Clear"/>. Not thread-safe.
 /// </para>
 /// </remarks>
-[RequiresUnreferencedCode("The object mapper inspects mapped types by reflection.")]
-[RequiresDynamicCode("The object mapper creates generic collection types at runtime.")]
 public sealed partial class GsObjectContext
 {
     private readonly GciSession _session;
-    private GsShapeFactory _shapes = new();
+    private readonly IGsMappingProvider _mappings;
+    private GsShapeFactory _shapes;
     private readonly Dictionary<Oop, object> _identity = [];
     private readonly Dictionary<object, Oop> _oops = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<(Oop Sub, Oop Super), bool> _subclassCache = [];
@@ -71,10 +70,26 @@ public sealed partial class GsObjectContext
     private readonly Dictionary<string, Oop> _kernelClasses = [];
     private readonly Dictionary<Oop, string> _classNames = [];
 
-    public GsObjectContext(GciSession session)
+    /// <summary>A context that finds the mapping metadata by reflection.</summary>
+    /// <remarks>
+    /// Not trimming- or AOT-safe. For trimmed or native AOT applications use
+    /// <see cref="GsObjectContext(GciSession, IGsMappingProvider)"/> with the generated
+    /// <c>GemStone.Gci.Generated.GsGeneratedMappings.Default</c>.
+    /// </remarks>
+    [RequiresUnreferencedCode("The object mapper inspects mapped types by reflection. Use the constructor with GsGeneratedMappings.Default instead.")]
+    [RequiresDynamicCode("The object mapper creates generic collection types at runtime. Use the constructor with GsGeneratedMappings.Default instead.")]
+    public GsObjectContext(GciSession session) : this(session, new ReflectionMappingProvider())
+    {
+    }
+
+    /// <summary>A context with the given mapping metadata, usually the generated <c>GsGeneratedMappings.Default</c>.</summary>
+    public GsObjectContext(GciSession session, IGsMappingProvider mappings)
     {
         ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(mappings);
         _session = session;
+        _mappings = mappings;
+        _shapes = new GsShapeFactory(mappings);
     }
 
     /// <summary>Loads the object graph below <paramref name="root"/> as <typeparamref name="T"/>.</summary>
@@ -149,7 +164,7 @@ public sealed partial class GsObjectContext
         if (errors.Count > 0)
         {
             // Not usable: start over next time (e.g. after the image was fixed).
-            _shapes = new GsShapeFactory();
+            _shapes = new GsShapeFactory(_mappings);
             throw GsMappingException.For(errors);
         }
         return shape;
@@ -328,8 +343,6 @@ public sealed partial class GsObjectContext
         " ifTrue: [| a | a := Array new. c keysAndValuesDo: [:k :v | a add: k; add: v]. a]" +
         " ifFalse: [c asArray]]]";
 
-    [RequiresUnreferencedCode("The object mapper inspects mapped types by reflection.")]
-    [RequiresDynamicCode("The object mapper creates generic collection types at runtime.")]
     private sealed class LoadRun(GsObjectContext ctx, GsLoadOptions options, bool callerOwnsRoot)
     {
         private Oop _root = Oop.Illegal;
@@ -457,7 +470,7 @@ public sealed partial class GsObjectContext
             if (_actualMaps.TryGetValue((oop, expected), out var known)) return known;
             var map = ctx.SelectMap(expected, report.Class)
                 ?? throw GsMappingException.For($"{where}: expected a {expected.Class.Name} for {expected.Type.Name}, got a {ctx.ClassName(report.Class)} ({oop}).");
-            if (map.Constructor is null)
+            if (map.Create is null)
                 throw GsMappingException.For($"{where}: {map.Type.Name} cannot be instantiated (abstract or no parameterless constructor) for a {ctx.ClassName(report.Class)}.");
             _actualMaps[(oop, expected)] = map;
             return map;
@@ -511,7 +524,7 @@ public sealed partial class GsObjectContext
         private void Fill(object instance, Oop oop, GsTypeMap map)
         {
             var report = _reports[oop];
-            map.OopProperty?.SetValue(instance, oop);
+            map.SetOop?.Invoke(instance, oop);
             EntityEntry? entry = null;
             if (options.TrackChanges)
             {
@@ -533,9 +546,9 @@ public sealed partial class GsObjectContext
                 }
                 else
                     value = Value(ivOop, p.Shape, p.Path, p);
-                if (value is null && p.Property.PropertyType.IsValueType && Nullable.GetUnderlyingType(p.Property.PropertyType) is null)
-                    throw GsMappingException.For($"{p.Path}: nil cannot be assigned to {p.Property.PropertyType.Name} ({oop}).");
-                p.Property.SetValue(instance, value);
+                if (value is null && p.PropertyType.IsValueType && Nullable.GetUnderlyingType(p.PropertyType) is null)
+                    throw GsMappingException.For($"{p.Path}: nil cannot be assigned to {p.PropertyType.Name} ({oop}).");
+                p.Set(instance, value);
                 if (entry is not null)
                     entry.Properties[p] = new PropertySnapshot
                     {
@@ -552,7 +565,7 @@ public sealed partial class GsObjectContext
         private object? Value(Oop oop, GsShape shape, string where, GsPropertyMap? property)
         {
             if (property?.Converter is { } converter)
-                return converter.FromGemStone(Decode(oop, forScalar: true), property.Property.PropertyType);
+                return converter.FromGemStone(Decode(oop, forScalar: true), property.PropertyType);
 
             switch (shape.Kind)
             {
@@ -582,7 +595,7 @@ public sealed partial class GsObjectContext
                 _fill.Enqueue((existing, oop, map)); // loaded again: refresh
                 return existing;
             }
-            var instance = map.Constructor!.Invoke(null);
+            var instance = map.Create!();
             ctx._identity[oop] = instance;
             ctx._oops[instance] = oop;
             _filled.Add(oop);
@@ -614,26 +627,26 @@ public sealed partial class GsObjectContext
             {
                 case GsShapeKind.Array:
                 {
-                    var array = Array.CreateInstance(shape.Element!.Type, elements.Length);
+                    var array = (IList)shape.New!(elements.Length);
                     for (var i = 0; i < elements.Length; i++)
-                        array.SetValue(Element(elements[i], shape.Element, where), i);
+                        array[i] = Element(elements[i], shape.Element!, where);
                     return array;
                 }
                 case GsShapeKind.List:
                 {
-                    var list = (IList)Activator.CreateInstance(shape.Concrete!, elements.Length)!;
-                    foreach (var e in elements) list.Add(Element(e, shape.Element!, where));
+                    var list = shape.New!(elements.Length);
+                    foreach (var e in elements) shape.AddElement!(list, Element(e, shape.Element!, where));
                     return list;
                 }
                 case GsShapeKind.Set:
                 {
-                    var set = Activator.CreateInstance(shape.Concrete!)!;
-                    foreach (var e in elements) shape.AddMethod!.Invoke(set, [Element(e, shape.Element!, where)]);
+                    var set = shape.New!(elements.Length);
+                    foreach (var e in elements) shape.AddElement!(set, Element(e, shape.Element!, where));
                     return set;
                 }
                 default:
                 {
-                    var dict = (IDictionary)Activator.CreateInstance(shape.Concrete!)!;
+                    var dict = (IDictionary)shape.New!(elements.Length / 2);
                     for (var i = 0; i + 1 < elements.Length; i += 2)
                     {
                         var key = Element(elements[i], shape.Key!, $"key of {where}")

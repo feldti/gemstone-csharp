@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Text;
+using GemStone.Gci.Generated;
 using GemStone.Gci.Mapping;
 
 namespace GemStone.Gci.Tests.Mapping;
@@ -23,10 +24,20 @@ public sealed class NestedCollections
 /// SaveChanges against the classes of <see cref="MappingFixture"/> (own session, never committed).
 /// Every test works on fresh objects stored under its own key in UserGlobals.
 /// </summary>
+/// <summary>The same tests with the metadata of the source generator instead of reflection.</summary>
 [Collection("Stone")]
-public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : IClassFixture<MappingFixture>
+public sealed class GsSaveChangesGeneratedIntegrationTests(MappingFixture fixture) : GsSaveChangesIntegrationTests(fixture)
 {
-    private GciSession S => fixture.Session!;
+    protected override GsObjectContext NewContext() => new(S, GsGeneratedMappings.Default);
+}
+
+[Collection("Stone")]
+public class GsSaveChangesIntegrationTests(MappingFixture fixture) : IClassFixture<MappingFixture>
+{
+    protected GciSession S => fixture.Session!;
+
+    /// <summary>The context under test: mapping metadata by reflection here, generated in the subclass.</summary>
+    protected virtual GsObjectContext NewContext() => new(S);
 
     /// <summary>A fresh account (with one order and a dictionary) under a new key; returns the key.</summary>
     private string NewAccount()
@@ -74,7 +85,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void NestedCollectionsArePatchedInPlace()
     {
         var n = NewNested();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var obj = ctx.Load<NestedCollections>(n);
         Assert.Equal([[1, 2], [3]], obj.Rows!);
         Assert.Equal(["x"], obj.Groups!["a"]);
@@ -103,7 +114,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void NewAndMovedInnerCollections()
     {
         var n = NewNested();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var obj = ctx.Load<NestedCollections>(n);
         var row2 = Eval<long>($"({n} instVarNamed: 'rows') last asOop");
 
@@ -130,7 +141,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
         Assert.Equal("anOrderedCollection( 'z', 'zz')", Print($"(({n} instVarNamed: 'groups') at: 'b')"));
         Assert.Equal("anArray( anArray( 5), anArray( 6))", Print($"({n} instVarNamed: 'grid')"));
 
-        using var fresh = new GsObjectContext(S);
+        using var fresh = NewContext();
         var again = fresh.Load<NestedCollections>(n);
         Assert.Equal([[3], [7, 8, 9]], again.Rows!);
         Assert.Equal(["z", "zz"], again.Groups!["b"]);
@@ -139,7 +150,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     [StoneFact]
     public void NewObjectWithNestedCollections()
     {
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var obj = new NestedCollections { Rows = [[1], [2, 3]], Groups = new() { ["k"] = ["v", "w"] }, Grid = [[1, 2]] };
         var oop = ctx.Add(obj);
         var n = $"(Object _objectForOop: {oop.Value})";
@@ -155,7 +166,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     [StoneFact]
     public void UnchangedObjectsWriteNothing()
     {
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         ctx.Load<List<Account>>("UserGlobals at: #GsMapTestAccounts");
         Assert.Equal(0, ctx.SaveChanges());
     }
@@ -164,7 +175,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void ChangedScalarsAreWrittenOnce()
     {
         var key = NewAccount();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var a = ctx.Load<Account>($"UserGlobals at: #{key}");
 
         a.Name = "Dora Neu";
@@ -183,7 +194,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
         Assert.Equal(new DateOnly(2025, 12, 24), Eval<DateOnly>($"{acc} instVarNamed: 'opened'"));
 
         // A fresh context sees the written state.
-        using var fresh = new GsObjectContext(S);
+        using var fresh = NewContext();
         var again = fresh.Load<Account>($"UserGlobals at: #{key}");
         Assert.Equal(AccountStatus.Frozen, again.Status);
         Assert.Equal(99.95m, again.Balance);
@@ -193,7 +204,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void NewObjectsAndReferencesAreCreated()
     {
         var key = NewAccount();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var a = ctx.Load<Account>($"UserGlobals at: #{key}");
 
         a.Address = new Address { Street = "New Street 5", City = "Köln" };
@@ -218,7 +229,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void ChangedCollectionsAreRewrittenInPlace()
     {
         var key = NewAccount();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var a = ctx.Load<Account>($"UserGlobals at: #{key}");
         var acc = $"(UserGlobals at: #{key})";
         var tagsBefore = Eval<long>($"({acc} instVarNamed: 'tags') asOop");
@@ -243,7 +254,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void CollectionsCanBecomeNilAndBeCreated()
     {
         var key = NewAccount();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var order = ctx.Load<Account>($"UserGlobals at: #{key}").Orders[0];
         var lines = $"((UserGlobals at: #{key}) instVarNamed: 'orderList') first instVarNamed: 'lines'";
 
@@ -267,7 +278,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
             UserGlobals at: #GsSaveTestHolder put: h.
             true
             """);
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var h = ctx.Load<Holder>("UserGlobals at: #GsSaveTestHolder");
         h.BySymbol!["office"] = new Address { City = "Berlin" };
 
@@ -283,7 +294,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void ReadOnlyPropertiesAndOneWayConvertersAreRespected()
     {
         var key = NewAccount();
-        using (var ctx = new GsObjectContext(S))
+        using (var ctx = NewContext())
         {
             var a = ctx.Load<AccountWithReadOnlyName>($"UserGlobals at: #{key}");
             a.Name = "ignored";
@@ -293,7 +304,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
             Assert.Equal("Dora", Eval<string>($"(UserGlobals at: #{key}) instVarNamed: 'accName'"));
         }
 
-        using var hctx = new GsObjectContext(S);
+        using var hctx = NewContext();
         var h = hctx.Load<Holder>("UserGlobals at: #GsMapTestHolderObj");
         h.Code = "XYZ"; // UpperCaseConverter has no ToGemStone
         Assert.Throws<NotSupportedException>(() => hctx.SaveChanges());
@@ -302,7 +313,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     [StoneFact]
     public void AddCreatesAStandaloneObject()
     {
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var address = new Address { Street = "Solo 1", City = "Hamm" };
         var oop = ctx.Add(address);
 
@@ -317,10 +328,10 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     {
         long Size() => S.Evaluate<long>("System hiddenSetSize: (System HiddenSetSpecifiers indexOf: 'PureExportSet')");
         var key = NewAccount();
-        using (var warm = new GsObjectContext(S)) warm.Load<Account>($"UserGlobals at: #{key}");
+        using (var warm = NewContext()) warm.Load<Account>($"UserGlobals at: #{key}");
 
         var before = Size();
-        using (var ctx = new GsObjectContext(S))
+        using (var ctx = NewContext())
         {
             var a = ctx.Load<Account>($"UserGlobals at: #{key}");
             Assert.True(Size() > before); // tracked objects are held
@@ -365,12 +376,12 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void ScalarValuesSurviveABatchedSave(object written, object expected)
     {
         var key = NewAccount();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         ctx.Load<Account>($"UserGlobals at: #{key}").Extra = written;
         Assert.Equal(1, ctx.SaveChanges());
         Assert.Equal(0, ctx.SaveChanges());
 
-        using var fresh = new GsObjectContext(S);
+        using var fresh = NewContext();
         var read = fresh.Load<Account>($"UserGlobals at: #{key}").Extra;
         Assert.Equal(expected, read);
         if (expected is DateTimeOffset dto) Assert.Equal(dto.Offset, ((DateTimeOffset)read!).Offset);
@@ -380,7 +391,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void StringsGetTheSameClassesAsNewString()
     {
         var key = NewAccount();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var a = ctx.Load<Account>($"UserGlobals at: #{key}");
         var acc = $"(UserGlobals at: #{key})";
         foreach (var text in new[] { "plain", "Grüße", "Grüße 😀", "" })
@@ -411,7 +422,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
             UserGlobals at: #{{key}} put: all asArray.
             true
             """);
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var accounts = ctx.Load<Account[]>($"UserGlobals at: #{key}");
         Assert.Equal(300, accounts.Length);
 
@@ -453,7 +464,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     public void AFailedBatchLeavesTheContextUnchanged()
     {
         var key = NewAccount();
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var a = ctx.Load<Account>($"UserGlobals at: #{key}");
         S.Execute($"(UserGlobals at: #{key}) immediateInvariant. true");
 
@@ -493,7 +504,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     {
         var key = NewHolder(collection);
         var items = $"((UserGlobals at: #{key}) instVarNamed: 'items')";
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var h = ctx.Load<Holder>($"UserGlobals at: #{key}");
         var before = ordered ? new[] { "a", "b", "c", "d" } : [.. h.Items!.Cast<string>()]; // Bag: any order
         Assert.Equal(["a", "b", "c", "d"], before.OrderBy(x => x, StringComparer.Ordinal));
@@ -521,7 +532,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
         S.Execute($"| h | h := (UserGlobals at: #GsMapTestHolder) new. h instVarNamed: 'items' put: #(1 2 3) copy; instVarNamed: 'big' put: 0; instVarNamed: 'when' put: DateAndTime now. UserGlobals at: #{key} put: h. true");
         var items = $"((UserGlobals at: #{key}) instVarNamed: 'items')";
         var arrayOop = Eval<long>($"{items} asOop");
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var h = ctx.Load<Holder>($"UserGlobals at: #{key}");
 
         h.Items![1] = "two"; // same size
@@ -543,7 +554,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
         // even elements added on the server after loading, stay.
         var key = NewAccount();
         var acc = $"(UserGlobals at: #{key})";
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var a = ctx.Load<Account>($"UserGlobals at: #{key}");
         S.Execute($$"""
             {{acc}} instVarNamed: 'tags' put: (({{acc}} instVarNamed: 'tags') add: 'server'; yourself).
@@ -573,7 +584,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
     {
         var key = NewHolder("OrderedCollection new");
         var holder = $"(UserGlobals at: #{key})";
-        using var ctx = new GsObjectContext(S);
+        using var ctx = NewContext();
         var h = ctx.Load<Holder>($"UserGlobals at: #{key}");
         h.IdSet!.Remove(3);
         h.IdSet.Add(5000);
@@ -584,7 +595,7 @@ public sealed class GsSaveChangesIntegrationTests(MappingFixture fixture) : ICla
         Assert.True(Eval<bool>($"({holder} instVarNamed: 'idSet') anySatisfy: [:x | x = (2 raisedTo: 62)]")); // a LargeInteger: equal, not identical
         Assert.Equal("IdentitySet", Eval<string>($"({holder} instVarNamed: 'idSet') class name"));
 
-        var order = new GsObjectContext(S);
+        var order = NewContext();
         using (order)
         {
             var accountKey = NewAccount();
