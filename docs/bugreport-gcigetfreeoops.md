@@ -21,6 +21,26 @@ was also seen with the 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6 Linux clients.
 
 Neither the manual nor `gci.hf` mentions a block size or a limit for `GciGetFreeOops`.
 
+[`repro/gcigetfreeoops.cc`](../repro/gcigetfreeoops.cc) shows both issues with `libgcirpc`
+alone; it builds on Linux and on Windows (instructions at the top of the file). Output with the
+3.7.6 Linux client, where only issue 2 occurs:
+
+```
+GciGetFreeOops(     1): no error,      1 distinct OOPs,      0 entries 0
+GciGetFreeOops(  1000): no error,   1000 distinct OOPs,      0 entries 0
+GciGetFreeOops(  2000): no error,   2000 distinct OOPs,      0 entries 0
+GciGetFreeOops(  4000): no error,   4000 distinct OOPs,      0 entries 0
+GciGetFreeOops( 10000): no error,  10000 distinct OOPs,      0 entries 0
+GciGetFreeOops(100000): no error, 100000 distinct OOPs,      0 entries 0
+GciGetFreeOops(102000): no error, 100000 distinct OOPs,   2000 entries 0   <-- not as expected
+GciGetFreeOops(150000): no error, 100000 distinct OOPs,  50000 entries 0   <-- not as expected
+  session OK: 3 + 4 = 7
+
+Issue 1: a count > 2000 that is not a multiple of 2000 (expected: 4001 OOPs)
+GciGetFreeOops(  4001): no error,   4001 distinct OOPs,      0 entries 0
+  session OK: 3 + 4 = 7
+```
+
 ## Issue 1: error 2166 on the Windows client
 
 ### Steps to reproduce
