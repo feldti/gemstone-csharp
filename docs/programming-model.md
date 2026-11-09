@@ -135,8 +135,7 @@ ctx.Load<Customer>(c.Oop);                          // load again to see the ser
 
 ## Notifications from the server
 
-The server cannot interrupt a client. A `GciSignalListener` asks instead, on a session of its
-own, and receives two kinds of notifications:
+A `GciSignalListener` receives two kinds of notifications, on a session of its own:
 
 - **Changed objects:** you watch committed objects; when another session commits a change to
   one of them, the listener reports it (GemStone's notify set).
@@ -156,7 +155,7 @@ listener.SignalsReceived += (_, e) =>                // on the UI thread if Star
     foreach (var m in e.Signals.Messages)
         Console.WriteLine($"session {m.SenderSerial} sent {m.Value}: {m.Message}");
 };
-listener.Start(TimeSpan.FromSeconds(1));             // or call listener.Poll() yourself
+listener.Start();                                    // waits on the server, reports within milliseconds
 
 // elsewhere, in another session or program:
 otherSession.SendSignal(listener.SessionId, 42, "price list updated");
@@ -165,20 +164,25 @@ otherSession.SendSignal(listener.SessionId, 42, "price list updated");
 In Smalltalk the same signal is `System sendSignal: 42 to: listenerSessionId withMessage: '…'`.
 
 Things to know:
-- **Use a session that does nothing else.** With signals enabled, any Smalltalk the session
-  runs can fail with GemStone error 6008 or 6010 when a signal arrives. The listener handles
-  that (and so loses no signal); other code would not.
+- **It is (almost) push:** `Start()` keeps one call waiting on the server, which returns as soon
+  as something arrives. In our measurements the event came 0.5–0.7 ms (median) after the other
+  session's commit or signal, without using CPU while waiting. The GCI stays free meanwhile;
+  other sessions of the process keep working.
+  `Start(interval)` polls instead, `Poll()` and `WaitAsync()` do one step yourself.
+- **Use a session that does nothing else:** each wait or poll aborts it, and a wait occupies it.
+  `Watch`, `Unwatch` and `Poll` interrupt a wait in progress (nothing gets lost).
 - **A notification is a hint, not the data.** To see the change, the session that works with
   the objects aborts (or commits) and loads them again. Unsaved local changes are protected:
   that load throws a `GsUnsavedChangesException` instead of overwriting them.
-- **Each poll costs one round trip** and aborts the listener session, so it never holds an old
-  view of the repository. A poll interval of a second or so is plenty for most applications.
 - **Signal texts are byte Strings on the server:** only characters up to U+00FF (Latin-1).
   `SendSignal` rejects anything else with an `ArgumentException`.
 - **Signals are not stored permanently.** They live in the receiving session until read, and
   disappear with it. For events that must not get lost (for example while no listener is
-  running), let the senders commit entries to a persistent queue, such as an `RcQueue`, and
-  use the signal only as a prompt to look.
+  running), let the senders commit entries to a persistent queue and use the signal only as a
+  prompt to look.
+
+How it works, the measurements, and the GemStone behaviour behind the design:
+[notifications.md](notifications.md).
 
 ## A desktop application: several windows and an input form
 

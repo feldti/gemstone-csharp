@@ -51,9 +51,9 @@ convert values, run transactions, read and write objects, and load object graphs
   `PerformTraverse`) and decode it offline. `FetchPaths` reads instance-variable paths from many
   objects at once.
 - **Notifications:** `GciSignalListener` reports changes other sessions commit to watched objects
-  and signals sent with `SendSignal` (or `System sendSignal:to:withMessage:`), by polling on a
-  session of its own, optionally in the background with an event. See
-  [docs/programming-model.md](docs/programming-model.md#notifications-from-the-server).
+  and signals sent with `SendSignal` (or `System sendSignal:to:withMessage:`). It waits on the
+  server on a session of its own and raises an event within a millisecond of the commit or signal. See
+  [docs/notifications.md](docs/notifications.md).
 - **Object mapping:** load GemStone objects into your own C# classes, mapped with attributes,
   and write changes back with `SaveChanges`. Instance-variable names may differ from property
   names. Shared references, cycles, subclasses and collections are handled, and mapping errors
@@ -283,6 +283,8 @@ These were found while building the wrapper. The wrapper works around all of the
 | `GciResolveSymbol` leaves a String with the name in the PureExportSet on every call. | yes | yes | yes | yes | fixed | `ResolveSymbol` uses `GciResolveSymbolObj` with its own String, which it releases. |
 | `DateAndTime printString` fails ("unexpected format") when the NetLDI runs with a German `LC_NUMERIC`. | – | – | – | yes | – | Not a wrapper issue: start the NetLDI with `LC_NUMERIC=C`. The wrapper never parses locale-dependent `printString` output. |
 | The compiler fails on `Utf8` source objects that contain a block ("Internal logic error in compiler: ComStrmSetCursor"). | yes | yes | yes | fixed | fixed | Non-ASCII source is sent as a Unicode string instead of `Utf8`. |
+| With signal errors enabled (`enableSignaledGemStoneSessionError`, `enableSignaledObjectsError`), a session signal followed by a commit notification that both arrive while the session is idle surface as error 6008 only; the session signal is lost (neither in an error nor in the queue). | yes | yes | yes | yes | yes | The listener keeps raising off except while it waits inside Smalltalk, where it handles the notifications itself. See [docs/notifications.md](docs/notifications.md). |
+| `System signalFromGemStoneSession` (deprecated) fails with "UndefinedObject does not understand #serialNumber" for a signal whose sender has logged out. | – | – | yes | yes | yes | The listener uses `System _signalFromGemStoneSession`. |
 | `GciOopToFlt_` does not exist before 3.7. | missing | missing | – | – | – | `ToDouble` falls back to `GciOopToFlt`. |
 | `GciGetFreeOops` hands out at most 100,000 OOPs per call and silently leaves the rest of the result array 0. | yes | yes | yes | yes | yes | `GetFreeOops` asks in chunks and checks for 0. |
 | Windows client only: `GciGetFreeOops(n)` with n > 2,000 and not a multiple of 2,000 fails with error 2166 ("lgcUncompress failed decompression would exceed size of destination buffer"). The Linux client library is not affected. See [docs/bugreport-gcigetfreeoops.md](docs/bugreport-gcigetfreeoops.md) and the C program [repro/gcigetfreeoops.cc](repro/gcigetfreeoops.cc). | not tested | not tested | not tested | not tested | yes | `GetFreeOops` asks for whole blocks of 2,000 and keeps the rest for the next call. |
@@ -303,7 +305,7 @@ src/GemStone.Gci/           the library
 tests/GemStone.Gci.Tests/   unit tests and integration tests ([StoneFact])
 tests/GemStone.Gci.Generators.Tests/  unit tests of the source generator
 samples/GsRepl/             interactive console (separate solution)
-docs/                       programming model, platform testing, bug reports
+docs/                       programming model, notifications, platform testing, bug reports
 ```
 
 ## Not implemented yet

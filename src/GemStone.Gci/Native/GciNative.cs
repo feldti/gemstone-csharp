@@ -449,6 +449,26 @@ internal static unsafe partial class GciNative
     }
     private static nint _GciNbEndPoll;
 
+    /// <summary>
+    /// int GciNbGetNotifyHandle(void); — OS descriptor of the current session that becomes
+    /// readable when GciNbEnd* has something to read; -1 if not available (linked GCI).
+    /// </summary>
+    public static int GciNbGetNotifyHandle()
+    {
+        return ((delegate* unmanaged[Cdecl]<int>)Fn(ref _GciNbGetNotifyHandle, "GciNbGetNotifyHandle"))();
+    }
+    private static nint _GciNbGetNotifyHandle;
+
+    /// <summary>
+    /// int GciPollSocketForRead(int socketFd, int timeoutMs); — 1 readable, 0 timeout, &lt; 0 -errno.
+    /// Thread-safe and unrelated to the current session: may be called without the GCI lock.
+    /// </summary>
+    public static int GciPollSocketForRead(int socketFd, int timeoutMs)
+    {
+        return ((delegate* unmanaged[Cdecl]<int, int, int>)Fn(ref _GciPollSocketForRead, "GciPollSocketForRead"))(socketFd, timeoutMs);
+    }
+    private static nint _GciPollSocketForRead;
+
     /// <summary>void GciNbExecuteStr(const char source[], OopType symbolList);</summary>
     public static void GciNbExecuteStr(string source, ulong symbolList)
     {

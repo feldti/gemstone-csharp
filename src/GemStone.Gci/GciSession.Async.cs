@@ -161,73 +161,127 @@ public sealed partial class GciSession
     /// Starts a nonblocking call and polls until it completes, releasing the GCI lock between polls.
     /// Returns the raw result (OOP or BoolType); errors are thrown like their blocking counterparts.
     /// </summary>
-    private async Task<long> RunNonblocking(Action start, ResultKind kind, CancellationToken ct)
+    /// <param name="start">Starts the nonblocking call (under the lock, session active).</param>
+    /// <param name="kind">How to read the result.</param>
+    /// <param name="ct">Sends a soft break.</param>
+    /// <param name="signals">If set, signals that make the call fail (6008/6010) are captured here and the call repeated.</param>
+    /// <param name="waitOnSocket">
+    /// Wait for the session's socket (GciNbGetNotifyHandle + GciPollSocketForRead, outside the
+    /// lock) instead of polling with a growing delay: no CPU while waiting, and the result is
+    /// picked up as soon as it arrives. For long calls such as the signal listener's wait.
+    /// </param>
+    private async Task<long> RunNonblocking(Action start, ResultKind kind, CancellationToken ct,
+        List<GciSessionSignal>? signals = null, bool waitOnSocket = false)
     {
-        ct.ThrowIfCancellationRequested();
-        lock (Sync)
+        var maxDelay = MaxPollDelay;
+        for (var attempt = 1; ; attempt++)
         {
-            Activate();
-            start();
-            _nbInProgress = true;
-        }
-
-        var breakSent = false;
-        var delay = TimeSpan.FromMilliseconds(1);
-        while (true)
-        {
-            if (TryFinish(kind, breakSent, out var result))
-                return result;
-
-            if (!breakSent && ct.IsCancellationRequested && kind == ResultKind.Oop)
+            ct.ThrowIfCancellationRequested();
+            var handle = -1;
+            lock (Sync)
             {
-                lock (Sync)
-                {
-                    if (_nbInProgress)
-                    {
-                        SwitchTo();
-                        GciNative.GciSoftBreak(); // the call then completes with RT_ERR_SOFT_BREAK
-                    }
-                }
-                breakSent = true;
-                continue;
+                Activate();
+                start();
+                _nbInProgress = true;
+                if (waitOnSocket) handle = GciNative.GciNbGetNotifyHandle();
             }
 
-            await Task.Delay(delay, CancellationToken.None).ConfigureAwait(false);
-            if (delay < MaxPollDelay) delay = TimeSpan.FromTicks(delay.Ticks * 2);
+            var breakSent = false;
+            var delay = TimeSpan.FromMilliseconds(1);
+            while (true)
+            {
+                var state = TryFinish(kind, breakSent, signals, attempt, out var result);
+                if (state == Finish.Done) return result;
+                if (state == Finish.Retry) break;
+
+                if (!breakSent && ct.IsCancellationRequested && kind == ResultKind.Oop)
+                {
+                    lock (Sync)
+                    {
+                        if (_nbInProgress)
+                        {
+                            SwitchTo();
+                            GciNative.GciSoftBreak(); // the call then completes with RT_ERR_SOFT_BREAK
+                        }
+                    }
+                    breakSent = true;
+                    continue;
+                }
+
+                if (handle >= 0)
+                {
+                    // Blocks a pool thread for up to SocketWaitSlice, without the lock and without CPU.
+                    var h = handle;
+                    if (await Task.Run(() => GciNative.GciPollSocketForRead(h, (int)SocketWaitSlice.TotalMilliseconds)).ConfigureAwait(false) < 0)
+                        handle = -1; // poll failed: fall back to the timed loop
+                    continue;
+                }
+                await Task.Delay(delay, CancellationToken.None).ConfigureAwait(false);
+                if (delay < maxDelay) delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, maxDelay.Ticks));
+            }
         }
     }
 
-    /// <summary>One poll under the lock; true when the call has completed (result or exception).</summary>
-    private unsafe bool TryFinish(ResultKind kind, bool cancelled, out long result)
+    private enum Finish { Pending, Done, Retry }
+
+    /// <summary>
+    /// One poll under the lock: <see cref="Finish.Done"/> when the call has completed (result or
+    /// exception), <see cref="Finish.Retry"/> when it failed because a signal arrived first and
+    /// <paramref name="signals"/> captured it (see <see cref="CallCapturingSignals"/>).
+    /// </summary>
+    private unsafe Finish TryFinish(ResultKind kind, bool cancelled, List<GciSessionSignal>? signals, int attempt, out long result)
     {
         lock (Sync)
         {
+            result = 0;
             SwitchTo(); // throws ObjectDisposedException if the session was disposed meanwhile
             long value = 0;
             var status = GciNative.GciNbEndPoll(&value, 0);
             if (status is GciNative.NbProgress.NotReady or GciNative.NbProgress.Progressed)
-            {
-                result = 0;
-                return false;
-            }
+                return Finish.Pending;
 
             _nbInProgress = false;
-            try
+            if (status == GciNative.NbProgress.HasError || kind == ResultKind.Void ||
+                (kind == ResultKind.Oop && new Oop((ulong)value).IsNil) ||
+                (kind == ResultKind.Bool && value == 0))
             {
-                if (status == GciNative.NbProgress.HasError || kind == ResultKind.Void ||
-                    (kind == ResultKind.Oop && new Oop((ulong)value).IsNil) ||
-                    (kind == ResultKind.Bool && value == 0))
-                    ThrowIfError(); // nil / FALSE is also a valid result: only throws if GciErr has one
-            }
-            catch (GciException ex) when (cancelled)
-            {
-                throw new OperationCanceledException("The GemStone call was interrupted by a soft break.", ex);
+                // nil / FALSE is also a valid result: only an error if GciErr has one
+                var error = LastError();
+                if (error is not null)
+                {
+                    if (signals is not null && attempt <= 1000 && TryCaptureSignal(error, signals)) return Finish.Retry;
+                    DiscardError(error);
+                    if (cancelled) throw new OperationCanceledException("The GemStone call was interrupted by a soft break.", error);
+                    throw error;
+                }
             }
 
             result = value;
-            return true;
+            return Finish.Done;
         }
     }
+
+    /// <summary>
+    /// <see cref="PerformAsync(Oop, string, Oop[], CancellationToken)"/> on a session with signals
+    /// enabled: a signal that arrived while the session was idle is captured and the call repeated.
+    /// </summary>
+    /// <param name="receiver">Receiver of the message.</param>
+    /// <param name="selector">Selector of the message.</param>
+    /// <param name="args">The arguments, asked again for every attempt (a repeated call may need others).</param>
+    /// <param name="signals">Receives the captured signals.</param>
+    /// <param name="ct">Sends a soft break.</param>
+    internal async Task<Oop> PerformCapturingSignalsAsync(Oop receiver, string selector, Func<Oop[]> args,
+        List<GciSessionSignal> signals, CancellationToken ct)
+    {
+        return new Oop((ulong)await RunNonblocking(() => StartPerform(receiver, selector, args()), ResultKind.Oop, ct,
+            signals, waitOnSocket: true).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// How long one wait for the socket lasts before cancellation is checked again (a
+    /// cancellation sends a soft break at most this late).
+    /// </summary>
+    private static readonly TimeSpan SocketWaitSlice = TimeSpan.FromMilliseconds(50);
 
     /// <summary>Called from Dispose (under the lock): interrupt and drain a pending nonblocking call before logging out.</summary>
     private unsafe void FinishPendingNonblockingCall()

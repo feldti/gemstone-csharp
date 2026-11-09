@@ -83,30 +83,39 @@ public sealed partial class GciSession
                 if (!result.IsNil) return result;
                 var error = LastError();
                 if (error is null) return result;
-                if (error.Number is not (SignalCommitError or SignalGemStoneSessionError) || attempt > 1000)
-                    Throw(error);
-
-                if (error.Number == SignalGemStoneSessionError && error.Args.Count >= 3)
-                {
-                    var serial = new Oop(error.Args[0]);
-                    var value = new Oop(error.Args[1]);
-                    var text = new Oop(error.Args[2]);
-                    signals.Add(new GciSessionSignal(
-                        serial.IsSmallInteger ? serial.ToSmallInteger() : 0,
-                        null,
-                        value.IsSmallInteger ? value.ToSmallInteger() : 0,
-                        text.IsNil ? "" : ToStringValue(text)));
-                }
-                // 6008 carries nothing: the objects stay in "System signaledObjects".
-                DiscardError(error);
+                if (attempt > 1000 || !TryCaptureSignal(error, signals)) Throw(error);
             }
         }
+    }
+
+    /// <summary>
+    /// If <paramref name="error"/> is a signal (6008/6010), records it in <paramref name="signals"/>
+    /// (6010 with its sender, value and text, read before the error's OOPs are released), cleans
+    /// up after the error and returns true. Under <see cref="Sync"/>.
+    /// </summary>
+    private bool TryCaptureSignal(GciException error, List<GciSessionSignal> signals)
+    {
+        if (error.Number is not (SignalCommitError or SignalGemStoneSessionError)) return false;
+        if (error.Number == SignalGemStoneSessionError && error.Args.Count >= 3)
+        {
+            var serial = new Oop(error.Args[0]);
+            var value = new Oop(error.Args[1]);
+            var text = new Oop(error.Args[2]);
+            signals.Add(new GciSessionSignal(
+                serial.IsSmallInteger ? serial.ToSmallInteger() : 0,
+                null,
+                value.IsSmallInteger ? value.ToSmallInteger() : 0,
+                text.IsNil ? "" : ToStringValue(text)));
+        }
+        // 6008 carries nothing: the objects stay in "System signaledObjects".
+        DiscardError(error);
+        return true;
     }
 }
 
 /// <summary>A signal another session sent with <see cref="GciSession.SendSignal"/>.</summary>
 /// <param name="SenderSerial">Serial number of the sending session (unique, unlike session numbers).</param>
-/// <param name="SenderSessionId">Session number of the sender (<see cref="GciSession.GemSessionId"/>), if known.</param>
+/// <param name="SenderSessionId">Session number of the sender (<see cref="GciSession.GemSessionId"/>); null if it has logged out meanwhile (with GemStone 3.6 possibly still the old number for a while). Session numbers are reused, serial numbers are not.</param>
 /// <param name="Value">The number sent with the signal.</param>
 /// <param name="Message">The text sent with the signal.</param>
 public sealed record GciSessionSignal(long SenderSerial, long? SenderSessionId, long Value, string Message);
