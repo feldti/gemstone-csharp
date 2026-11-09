@@ -221,7 +221,7 @@ public sealed partial class GsObjectContext : IDisposable
         List<object>? dirty = null;
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
         foreach (var (oop, type) in reached)
-            if (_identity.TryGetValue(oop, out var entity) && type.IsInstanceOfType(entity) && seen.Add(entity)
+            if (TryFind(oop, type, out var entity) && seen.Add(entity)
                 && _entries.TryGetValue(entity, out var entry) && HasChanges(entry))
                 (dirty ??= []).Add(entity);
         if (dirty is not null) throw new GsUnsavedChangesException(dirty);
@@ -461,7 +461,7 @@ public sealed partial class GsObjectContext : IDisposable
             _onSuccess.Add(() =>
             {
                 var resolved = oop.Resolved;
-                ctx._identity[resolved] = entity;
+                ctx.Remember(resolved, entity);
                 ctx._oops[entity] = resolved;
                 ctx._entries[entity] = entry[0] = new EntityEntry(entity, resolved, map);
                 map.SetOop?.Invoke(entity, resolved);
@@ -742,13 +742,17 @@ public sealed partial class GsObjectContext : IDisposable
             if (value is null) return BatchValue.Of(Oop.Nil);
             return shape.Kind switch
             {
-                GsShapeKind.Oop => BatchValue.Of((Oop)value),
+                GsShapeKind.Oop => BatchValue.Of(OrNil((Oop)value)),
                 GsShapeKind.Mapped => EntityValue(value),
-                GsShapeKind.Object => value is Oop o ? BatchValue.Of(o) : IsEntity(value) ? EntityValue(value) : Scalar(value, snap, where),
+                GsShapeKind.Object => value is Oop o ? BatchValue.Of(OrNil(o)) : IsEntity(value) ? EntityValue(value) : Scalar(value, snap, where),
                 GsShapeKind.Scalar => Scalar(value, snap, where),
                 _ => throw new NotSupportedException($"{where}: nested collections cannot be saved yet."),
             };
         }
+
+        // An Oop property nobody set (a new C# instance) holds default(Oop), which is not an
+        // object: writing it would be a reference to OOP 0 and fail the batch with error 2106.
+        private static Oop OrNil(Oop oop) => oop == default ? Oop.Nil : oop;
 
         private BatchValue EntityValue(object entity) =>
             ctx._oops.TryGetValue(entity, out var oop) ? BatchValue.Of(oop) : Insert(entity);

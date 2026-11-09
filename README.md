@@ -160,6 +160,11 @@ How `SaveChanges` works:
   many objects in one load (e.g. the ones a `GciSignalListener` reported). If that would overwrite changes
   not saved yet, `Load` throws a `GsUnsavedChangesException` instead (or overwrites them with
   `GsLoadOptions { DiscardLocalChanges = true }`).
+- **Several C# classes for one GemStone class:** an overview class and a detail class can map
+  the same GemStone class with different properties. In one context, each object then has one
+  instance per C# class; both are tracked, and `Refresh` updates both. A property of type `Oop`
+  (or `List<Oop>`) keeps a reference without loading its target: that is how a large graph is
+  cut into pieces (see [docs/programming-model.md](docs/programming-model.md#large-object-graphs)).
 - **What it doesn't do:** it doesn't commit. If a save fails, the server may already hold part
   of the changes: abort, `Clear()` the context and reload.
 - **Saved, then aborted:** an abort (also after a failed commit) takes back on the server what
@@ -286,6 +291,7 @@ These were found while building the wrapper. The wrapper works around all of the
 | The compiler fails on `Utf8` source objects that contain a block ("Internal logic error in compiler: ComStrmSetCursor"). | yes | yes | yes | fixed | fixed | Non-ASCII source is sent as a Unicode string instead of `Utf8`. |
 | With signal errors enabled (`enableSignaledGemStoneSessionError`, `enableSignaledObjectsError`), a session signal followed by a commit notification that both arrive while the session is idle surface as error 6008 only; the session signal is lost (neither in an error nor in the queue). | yes | yes | yes | yes | yes | The listener keeps raising off except while it waits inside Smalltalk, where it handles the notifications itself. See [docs/notifications.md](docs/notifications.md). |
 | `System signalFromGemStoneSession` (deprecated) fails with "UndefinedObject does not understand #serialNumber" for a signal whose sender has logged out. | – | – | yes | yes | yes | The listener uses `System _signalFromGemStoneSession`. |
+| A traversal answer of 128 KB or more often stalls for about 40 ms per buffer (stone and client on one machine; looks like TCP delayed acknowledgement). 19,615 objects took 136 ms with a 256 KB buffer and 15 ms with 64 KB. | yes | not tested | not tested | not tested | yes | The traversal buffer defaults to 64 KB (`GciTraversalOptions.DefaultBufferSize`). |
 | `GciOopToFlt_` does not exist before 3.7. | missing | missing | – | – | – | `ToDouble` falls back to `GciOopToFlt`. |
 | `GciGetFreeOops` hands out at most 100,000 OOPs per call and silently leaves the rest of the result array 0. | yes | yes | yes | yes | yes | `GetFreeOops` asks in chunks and checks for 0. |
 | Windows client only: `GciGetFreeOops(n)` with n > 2,000 and not a multiple of 2,000 fails with error 2166 ("lgcUncompress failed decompression would exceed size of destination buffer"). The Linux client library is not affected. See [docs/bugreport-gcigetfreeoops.md](docs/bugreport-gcigetfreeoops.md) and the C program [repro/gcigetfreeoops.cc](repro/gcigetfreeoops.cc). | not tested | not tested | not tested | not tested | yes | `GetFreeOops` asks for whole blocks of 2,000 and keeps the rest for the next call. |

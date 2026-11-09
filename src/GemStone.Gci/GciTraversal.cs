@@ -194,8 +194,19 @@ public sealed class GciTraversal
 /// <summary>Options for traversals.</summary>
 public sealed record GciTraversalOptions
 {
-    /// <summary>Body size of the traversal buffer; larger means fewer GciMoreTraversal round trips.</summary>
-    public int BufferSize { get; init; } = 256 * 1024;
+    /// <summary>
+    /// Body size of the traversal buffer; larger means fewer GciMoreTraversal round trips.
+    /// </summary>
+    /// <remarks>
+    /// The default of 64 KB is deliberate. With 128 KB or more, a traversal whose answer fills the
+    /// buffer often stalls for about 40 ms per buffer (measured with 3.6.5 and 3.7.6, stone and
+    /// client on one machine): 19,615 objects took 136 ms with 256 KB and 15 ms with 64 KB.
+    /// Up to 96 KB no stall was seen.
+    /// </remarks>
+    public int BufferSize { get; init; } = DefaultBufferSize;
+
+    /// <summary>64 KB, see <see cref="BufferSize"/>.</summary>
+    public const int DefaultBufferSize = 64 * 1024;
 
     /// <summary>
     /// Keep the execution result of <see cref="GciSession.ExecuteTraverse"/> /

@@ -18,7 +18,7 @@ public sealed record GsLoadOptions
     public int Depth { get; init; } = 4;
 
     /// <summary>Traversal buffer size, see <see cref="GciTraversalOptions.BufferSize"/>.</summary>
-    public int BufferSize { get; init; } = 256 * 1024;
+    public int BufferSize { get; init; } = GciTraversalOptions.DefaultBufferSize;
 
     /// <summary>
     /// Remember the loaded state for <see cref="GsObjectContext.SaveChanges"/> and keep the loaded
@@ -91,7 +91,9 @@ public sealed partial class GsObjectContext
     private readonly GciSession _session;
     private readonly IGsMappingProvider _mappings;
     private GsShapeFactory _shapes;
-    private readonly Dictionary<Oop, object> _identity = [];
+    // One instance per GemStone object and C# type: a second C# class for the same object (a
+    // detail view next to an overview) gets its own instance, and both stay tracked.
+    private readonly Dictionary<Oop, List<object>> _identity = [];
     private readonly Dictionary<object, Oop> _oops = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<(Oop Sub, Oop Super), bool> _subclassCache = [];
     private readonly Dictionary<Oop, CollectionClass> _collectionCache = [];
@@ -159,6 +161,22 @@ public sealed partial class GsObjectContext
 
     private bool _ownRoot;
 
+    /// <summary>The instance of <paramref name="type"/> (or a subclass) this context holds for <paramref name="oop"/>.</summary>
+    private bool TryFind(Oop oop, Type type, [NotNullWhen(true)] out object? entity)
+    {
+        if (_identity.TryGetValue(oop, out var list))
+            foreach (var e in list)
+                if (type.IsInstanceOfType(e)) { entity = e; return true; }
+        entity = null;
+        return false;
+    }
+
+    private void Remember(Oop oop, object entity)
+    {
+        if (!_identity.TryGetValue(oop, out var list)) _identity[oop] = list = [];
+        list.Add(entity);
+    }
+
     /// <summary>
     /// Loads the objects with these OOPs again, in one load, into the same instances, e.g. the
     /// <see cref="GciSignals.ChangedObjects"/> a <see cref="GciSignalListener"/> reports. Abort
@@ -181,15 +199,19 @@ public sealed partial class GsObjectContext
 
         var entities = new List<object>();
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        Dictionary<Oop, object>? owners = null;
+        Dictionary<Oop, List<object>>? owners = null;
         foreach (var oop in oops)
         {
-            if (!_identity.TryGetValue(oop, out var entity))
+            if (_identity.TryGetValue(oop, out var list))
             {
-                owners ??= CollectionOwners();
-                if (!owners.TryGetValue(oop, out entity)) continue;
+                foreach (var e in list)
+                    if (seen.Add(e)) entities.Add(e);
+                continue;
             }
-            if (seen.Add(entity)) entities.Add(entity);
+            owners ??= CollectionOwners();
+            if (owners.TryGetValue(oop, out var collectionOwners))
+                foreach (var e in collectionOwners)
+                    if (seen.Add(e)) entities.Add(e);
         }
         if (entities.Count == 0) return [];
 
@@ -201,12 +223,13 @@ public sealed partial class GsObjectContext
     }
 
     /// <summary>Collections held in properties of tracked objects (also nested ones), with their owner.</summary>
-    private Dictionary<Oop, object> CollectionOwners()
+    private Dictionary<Oop, List<object>> CollectionOwners()
     {
-        var owners = new Dictionary<Oop, object>();
+        var owners = new Dictionary<Oop, List<object>>();
         void Add(CollectionSnapshot c, object owner)
         {
-            owners.TryAdd(c.Oop, owner);
+            if (!owners.TryGetValue(c.Oop, out var list)) owners[c.Oop] = list = [];
+            if (!list.Contains(owner)) list.Add(owner);
             foreach (var e in c.Elements)
                 if (e.Nested is { } nested) Add(nested, owner);
         }
@@ -221,9 +244,22 @@ public sealed partial class GsObjectContext
 
     /// <summary>
     /// The C# object this context holds for <paramref name="oop"/>, e.g. for the objects a
-    /// <see cref="GciSignalListener"/> reports as changed.
+    /// <see cref="GciSignalListener"/> reports as changed. If the object was loaded as several C#
+    /// classes, this is the first one; <see cref="GetEntities"/> answers all.
     /// </summary>
-    public bool TryGetEntity(Oop oop, [NotNullWhen(true)] out object? entity) => _identity.TryGetValue(oop, out entity);
+    public bool TryGetEntity(Oop oop, [NotNullWhen(true)] out object? entity)
+    {
+        if (_identity.TryGetValue(oop, out var list) && list.Count > 0) { entity = list[0]; return true; }
+        entity = null;
+        return false;
+    }
+
+    /// <summary>
+    /// All C# objects this context holds for <paramref name="oop"/>: one per C# class it was
+    /// loaded as (an overview class and a detail class for the same GemStone object, say).
+    /// </summary>
+    public IReadOnlyList<object> GetEntities(Oop oop) =>
+        _identity.TryGetValue(oop, out var list) ? [.. list] : [];
 
     /// <summary>
     /// Forgets all loaded objects (identity map and tracked state) and releases their OOPs;
@@ -694,21 +730,22 @@ public sealed partial class GsObjectContext
 
         private object Instance(Oop oop, GsTypeMap map)
         {
-            if (ctx._identity.TryGetValue(oop, out var existing) && map.Type.IsInstanceOfType(existing))
+            if (ctx.TryFind(oop, map.Type, out var existing))
             {
-                if (!_filled.Add(oop)) return existing;
+                if (!_filled.Add(existing)) return existing;
                 _fill.Enqueue((existing, oop, map)); // loaded again: refresh
                 return existing;
             }
             var instance = map.Create!();
-            ctx._identity[oop] = instance;
+            ctx.Remember(oop, instance);
             ctx._oops[instance] = oop;
-            _filled.Add(oop);
+            _filled.Add(instance);
             _fill.Enqueue((instance, oop, map));
             return instance;
         }
 
-        private readonly HashSet<Oop> _filled = [];
+        // Instances filled in this run (an object reached as two C# types is two instances).
+        private readonly HashSet<object> _filled = new(ReferenceEqualityComparer.Instance);
 
         private object Collection(Oop oop, GsShape shape, string where, GsCollectionKind? declared, List<SnapElement>? snapshot = null)
         {

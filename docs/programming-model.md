@@ -75,7 +75,7 @@ session.RunInTransaction(s =>
 What happens:
 - **`Load`** fetches the graph in a few round trips: traversals, plus one batch for values
   such as `decimal` or dates. Cycles and shared references are kept: within a context, each
-  GemStone object becomes exactly one C# object.
+  GemStone object becomes exactly one C# object (per C# class).
 - **`SaveChanges`** compares with the state at load time and writes only the differences, in
   one batch of about six GCI calls, however many objects changed. Collections are changed in
   place, nested ones too. New C# objects are created on the server with `new` on their
@@ -92,7 +92,9 @@ What happens:
 
 ## Loading the same object twice
 
-A context has an identity map: each GemStone object becomes exactly one C# object.
+A context has an identity map: each GemStone object becomes exactly one C# object (one per
+C# class, if you map the same GemStone class with several C# classes; see
+[Large object graphs](#large-object-graphs)).
 
 - **Twice in one `Load`** (two customers share an address, or a cycle such as
   `account → orders → account`): one instance, filled once; both places refer to it.
@@ -121,6 +123,75 @@ A context has an identity map: each GemStone object becomes exactly one C# objec
    same object, your commit fails. Then abort, load again and retry; `RunInTransaction` does
    that, and its work must be repeatable. It does not abort before the first attempt, so call
    `session.Abort()` first if you need the latest state.
+
+## Large object graphs
+
+A GemStone database is one large graph: everything is reachable from a few roots, and most
+associations have a way back (`election → electionDay`, `region → superRegion`), plus cross
+references (neighbours, comparable elections of earlier years, all elections of one type).
+`Load` follows every mapped property, so a C# class that maps everything loads everything it
+can reach, often the whole database.
+
+The mapping decides where loading stops. Map per screen, not per GemStone class:
+
+```csharp
+[GsClass("ElectionDay")]
+public class ElectionDayView
+{
+    [GsInstVar("name")] public string Name { get; set; } = "";
+    [GsInstVar("elections"), GsCollection(GsCollectionKind.Ordered)] public List<ElectionView> Elections { get; set; } = [];
+}
+
+[GsClass("Election")]
+public class ElectionView
+{
+    [GsInstVar("Key")] public long Key { get; set; }
+    [GsInstVar("electionDay")] public Oop Day { get; set; }              // the way back: not loaded
+    [GsInstVar("TopGeoEntity")] public RegionView? Top { get; set; }
+}
+
+[GsClass("GeoEntity")]
+public class RegionView
+{
+    [GsOop] public Oop Oop { get; private set; }
+    [GsInstVar("Key")] public string Key { get; set; } = "";
+    [GsInstVar("SuperGeoEntity")] public Oop Super { get; set; }
+    [GsInstVar("SubGeoEntities"), GsCollection(GsCollectionKind.Ordered)] public List<RegionView> Subs { get; set; } = [];
+    [GsInstVar("Neighbor"), GsCollection(GsCollectionKind.IdentitySet)] public List<Oop> Neighbors { get; set; } = [];
+}
+
+var day = ctx.Load<ElectionDayView>("Elections current");
+var district = day.Elections[0].Top!.Subs[3].Subs[2];    // plain C# from here on
+```
+
+- **Unmapped instance variables** are not loaded at all.
+- **A property of type `Oop`** (or `List<Oop>`) keeps the reference without loading the
+  target. Use it for ways back to the parent and for cross references. Load the target when it
+  is needed: `ctx.Load<RegionView>(district.Super)`. An `Oop` property nobody set is written
+  as nil.
+- **A level with many objects** can be a `List<Oop>` and be loaded when a window opens it. Load
+  such a list in one call: `ctx.Load<List<RegionView>>("… SubGeoEntities asArray")` took 1 ms
+  for 16 objects, 16 single `Load` calls 60 ms.
+- **A detail class** maps the same GemStone class with more properties (parties, notes …). In
+  the same context it is a second instance next to the overview instance: both are tracked,
+  `SaveChanges` writes what changed in either, and `Refresh` updates both.
+  `ctx.GetEntities(oop)` answers all instances of an object.
+- **Computed attributes** are methods, not instance variables, and are not mapped. Call them:
+  `session.Send(district.Oop, "displayString")`.
+- **Associations with two ends are not kept in sync.** `SaveChanges` writes instance variables;
+  it does not run the setters of the domain classes. A new region added to `Subs` does not get
+  its `SuperGeoEntity`, and it does not appear in other collections such as the election's list
+  of all regions. Set both ends in C#, or create such objects through a server method that does.
+
+Measured with a cut-out of a real election model on 3.7.6 (3 election days with 2 elections
+each, 3,377 regions per election, back references and cross references as above):
+
+| | Objects in C# | Time | GCI calls |
+|---|---|---|---|
+| Everything mapped, load one election day | 40,543 (all three days) | 1.2 s | 1,037 |
+| View classes as above | 6,757 (this day, its regions) | 108 ms | 142 |
+| `Oop` for the sub-regions, load the 16 states one by one / as one list | 18 / 16 | 60 ms / 1 ms | 128 / 5 |
+| `Refresh` of one state with its 210 regions | | 9 ms | 11 |
 
 ## Using the domain logic on the server
 

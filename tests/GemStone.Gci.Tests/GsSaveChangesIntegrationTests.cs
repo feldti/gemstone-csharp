@@ -12,6 +12,20 @@ public sealed class AccountWithReadOnlyName
     [GsInstVar("amount")] public decimal Balance { get; set; }
 }
 
+[GsClass("GsMapTestAccount")]
+public sealed class AccountWithOrderRefs
+{
+    [GsInstVar("orderList"), GsCollection(GsCollectionKind.Ordered)] public List<OrderWithAccountOop> Orders { get; set; } = [];
+}
+
+[GsClass("GsMapTestOrder")]
+public sealed class OrderWithAccountOop
+{
+    [GsInstVar("number")] public int Number { get; set; }
+    [GsInstVar("account")] public Oop Account { get; set; }
+    [GsInstVar("lines")] public object? Lines { get; set; }
+}
+
 [GsClass("GsMapTestNested")]
 public sealed class NestedCollections
 {
@@ -80,6 +94,52 @@ public class GsSaveChangesIntegrationTests(MappingFixture fixture) : IClassFixtu
     }
 
     private string Print(string expr) => Eval<string>($"{expr} printString");
+
+    [StoneFact]
+    public void TwoClassesForTheSameObjectKeepTheirOwnInstances()
+    {
+        // An overview class and a detail class on the same GemStone class, in one context: each
+        // gets its own instance, and loading one must not push the other out of the identity map.
+        var key = NewAccount();
+        var acc = $"UserGlobals at: #{key}";
+        using var ctx = NewContext();
+        var a = ctx.Load<Account>(acc);
+        var b = ctx.Load<AccountWithReadOnlyName>(a.Oop);
+        Assert.NotSame(a, b);
+        Assert.Same(a, ctx.Load<Account>(acc));           // not a new instance
+        Assert.Same(b, ctx.Load<AccountWithReadOnlyName>(a.Oop));
+        Assert.True(ctx.TryGetEntity(a.Oop, out var first));
+        Assert.Same(a, first);
+        Assert.Equal(2, ctx.GetEntities(a.Oop).Count);
+
+        // Refresh updates both, in one load.
+        S.Execute($"({acc}) instVarNamed: 'amount' put: 77s2");
+        var refreshed = ctx.Refresh([a.Oop]);
+        Assert.Equal(2, refreshed.Count);
+        Assert.Equal(77m, a.Balance);
+        Assert.Equal(77m, b.Balance);
+
+        // Unsaved changes of either are protected.
+        b.Balance = 5m;
+        var e = Assert.Throws<GsUnsavedChangesException>(() => ctx.Refresh([a.Oop]));
+        Assert.Same(b, Assert.Single(e.Entities));
+        Assert.Equal(1, ctx.SaveChanges());
+        Assert.Equal(5m, Eval<decimal>($"({acc}) instVarNamed: 'amount'"));
+    }
+
+    [StoneFact]
+    public void AnUnsetOopPropertyIsSavedAsNil()
+    {
+        // A new instance's Oop properties hold default(Oop) = 0 until set; the batch must write
+        // nil there, not a reference to OOP 0 (error 2106). Found with a back reference mapped as Oop.
+        var key = NewAccount();
+        using var ctx = NewContext();
+        var a = ctx.Load<AccountWithOrderRefs>($"UserGlobals at: #{key}");
+        Assert.NotEqual(Oop.Nil, a.Orders[0].Account);
+        a.Orders.Add(new OrderWithAccountOop { Number = 2, Lines = default(Oop) });
+        ctx.SaveChanges();
+        Assert.Equal("nil nil", Eval<string>($"| o | o := (UserGlobals at: #{key}) instVarNamed: 'orderList'. o size = 2 ifFalse: ['size ' , o size printString] ifTrue: [(o last instVarNamed: 'account') printString , ' ' , (o last instVarNamed: 'lines') printString]"));
+    }
 
     [StoneFact]
     public void ReloadDoesNotSilentlyDropUnsavedChanges()
