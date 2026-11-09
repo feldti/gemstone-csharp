@@ -91,8 +91,12 @@ public sealed partial class GciSession
     }
 
     /// <summary><see cref="TryCommit"/> asynchronously; false on a transaction conflict. Not cancellable once started.</summary>
-    public async Task<bool> TryCommitAsync() =>
-        await RunNonblocking(GciNative.GciNbCommit, ResultKind.Bool, CancellationToken.None) != 0;
+    public async Task<bool> TryCommitAsync()
+    {
+        if (await RunNonblocking(GciNative.GciNbCommit, ResultKind.Bool, CancellationToken.None) == 0) return false;
+        lock (Sync) OnTransactionEnded(committed: true);
+        return true;
+    }
 
     /// <summary><see cref="Commit"/> asynchronously.</summary>
     /// <exception cref="GciTransactionConflictException">Concurrency conflict; abort before retrying.</exception>
@@ -103,10 +107,30 @@ public sealed partial class GciSession
     }
 
     /// <summary><see cref="Abort"/> asynchronously.</summary>
-    public Task AbortAsync() => RunNonblocking(GciNative.GciNbAbort, ResultKind.Void, CancellationToken.None);
+    public async Task AbortAsync()
+    {
+        try
+        {
+            await RunNonblocking(GciNative.GciNbAbort, ResultKind.Void, CancellationToken.None);
+        }
+        finally
+        {
+            lock (Sync) OnTransactionEnded(committed: false);
+        }
+    }
 
     /// <summary><see cref="Begin"/> asynchronously.</summary>
-    public Task BeginAsync() => RunNonblocking(GciNative.GciNbBegin, ResultKind.Void, CancellationToken.None);
+    public async Task BeginAsync()
+    {
+        try
+        {
+            await RunNonblocking(GciNative.GciNbBegin, ResultKind.Void, CancellationToken.None);
+        }
+        finally
+        {
+            lock (Sync) OnTransactionEnded(committed: false);
+        }
+    }
 
     // ---- Machinery --------------------------------------------------------------------------
 

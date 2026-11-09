@@ -81,7 +81,14 @@ What happens:
   place, nested ones too. New C# objects are created on the server with `new` on their
   GemStone class.
 - **The commit is separate:** `SaveChanges` writes into the session's transaction. Only
-  `Commit` (or `RunInTransaction`) makes it permanent.
+  `Commit` (or `RunInTransaction`) makes it permanent. `ctx.SaveChangesAndCommit()` does both
+  and retries a conflict.
+- **An abort takes back what was saved but not committed**, and the context follows: after
+  `session.Abort()` (also after a failed commit) those objects count as changed again, and the
+  next `SaveChanges` writes them again. New objects keep their GemStone objects; only the
+  references to them are written again. The context notices aborts and commits through
+  `GciSession` (`Abort`, `Commit`, `Begin`, their `Async` versions, `RunInTransaction`), not
+  `System abortTransaction` in Smalltalk code.
 
 ## Loading the same object twice
 
@@ -172,6 +179,64 @@ Things to know:
   disappear with it. For events that must not get lost (for example while no listener is
   running), let the senders commit entries to a persistent queue, such as an `RcQueue`, and
   use the signal only as a prompt to look.
+
+## A desktop application: several windows and an input form
+
+Say windows A and B show customers and orders, and in form C the user is entering a new order
+or editing a customer. What happens, step by step:
+
+1. **While the user types in C,** the data exists only in C# objects. Nothing goes to the
+   server: no locks, and other users see nothing of it.
+2. **Windows A and B do not change by themselves,** even when other users commit changes to
+   what they show. Loaded objects are copies. A `GciSignalListener` tells you which objects
+   changed; you decide whether to reload a window.
+3. **Reloading a window** means `session.Abort()` (to see what others committed) and `Load`
+   again. The abort affects only the server; the C# objects of the other windows, and the
+   input in C, stay as they are.
+4. **If A and C show the same object** (A lists customers, C edits one of them) and share a
+   context, it is the same C# instance: what the user types in C already changes the object A
+   shows. Whether A displays that at once depends on data binding (`INotifyPropertyChanged`
+   on your classes). If A reloads while C has unsaved changes on that object, `Load` throws a
+   `GsUnsavedChangesException` rather than overwrite them; ask the user, and reload with
+   `DiscardLocalChanges` only if they agree.
+5. **Saving C** writes the changes and commits:
+
+   ```csharp
+   try
+   {
+       ctx.SaveChanges();
+       session.Commit();
+   }
+   catch (GciTransactionConflictException)
+   {
+       // Someone else committed changes to the same objects in the meantime.
+       session.Abort();                 // the saved changes are unsaved again, nothing is lost
+       // Either ask the user, or simply write the changes again on top of the new state:
+       ctx.SaveChanges();
+       session.Commit();
+   }
+   ```
+
+   `ctx.SaveChangesAndCommit()` does the same in one call (with up to three attempts).
+   Properties the user changed overwrite what the other session committed to the *same*
+   properties; everything else the other session changed is kept, including elements it added
+   to collections.
+
+Because an abort takes back saved changes that were not committed (and the context marks them
+as changed again), another window that aborts to refresh between your `SaveChanges` and your
+`Commit` does not lose your input: it is simply written again by the next save. Still, keep
+save and commit together; it is what users expect from a "Save" button.
+
+How to divide sessions and contexts:
+
+| Layout | Good | Watch out |
+|---|---|---|
+| **One work session and one context** for the application, plus a listener session | Each GemStone object is one C# object in every window; simple | `Abort`/`Commit` apply to all windows at once; one window's "Save" commits the other windows' saved changes too |
+| **One session and context per form** (plus the shared listener) | The form has its own transaction: saving or cancelling it does not touch other windows | The same customer in two windows is two C# objects; each session is a gem process on the server |
+
+A middle way is one session for all the windows that only display data, and an own session for
+each form that edits. "Cancel" in such a form is just disposing its context (and aborting its
+session).
 
 ## Threads and several sessions
 

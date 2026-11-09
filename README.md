@@ -140,7 +140,7 @@ accounts[0].Balance += 100m;
 accounts[0].Address = new Address { City = "Köln" };   // new object
 accounts[0].Orders.Add(new Order { Number = 42 });     // added to the existing collection
 ctx.SaveChanges();                                     // writes only what changed
-session.Commit();
+session.Commit();                                      // or both at once: ctx.SaveChangesAndCommit()
 ```
 
 How `SaveChanges` works:
@@ -161,6 +161,11 @@ How `SaveChanges` works:
   `GsLoadOptions { DiscardLocalChanges = true }`).
 - **What it doesn't do:** it doesn't commit. If a save fails, the server may already hold part
   of the changes: abort, `Clear()` the context and reload.
+- **Saved, then aborted:** an abort (also after a failed commit) takes back on the server what
+  was saved but not committed, and the context follows: those objects count as changed again,
+  and the next `SaveChanges` writes them again. `SaveChangesAndCommit()` relies on that to retry
+  a conflict. Only aborts and commits through `GciSession` are noticed, not
+  `System abortTransaction` in Smalltalk code.
 
 Supported collection types:
 - Array, OrderedCollection, SortedCollection → `List<T>` / `T[]`

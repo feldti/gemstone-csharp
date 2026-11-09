@@ -52,7 +52,7 @@ public sealed partial class GsObjectContext : IDisposable
     /// <summary>
     /// Writes all changes of tracked objects to the session: changed properties, changed collection
     /// contents and new objects reachable from tracked ones. Does <b>not</b> commit; call
-    /// <see cref="GciSession.Commit"/> (or use <see cref="GciSession.RunInTransaction(Action{GciSession}, int)"/>) afterwards.
+    /// <see cref="GciSession.Commit"/> afterwards, or use <see cref="SaveChangesAndCommit"/>.
     /// </summary>
     /// <returns>Number of instance variables stored plus collections changed.</returns>
     /// <remarks>
@@ -69,6 +69,12 @@ public sealed partial class GsObjectContext : IDisposable
     /// written part of the changes on the server: abort the transaction, <see cref="Clear"/>
     /// the context and reload.
     /// </para>
+    /// <para>
+    /// Saved but not yet committed changes are taken back by an abort (<see cref="GciSession.Abort"/>,
+    /// also after a failed commit): the objects count as changed again, and the next SaveChanges
+    /// writes them again. Objects created by SaveChanges keep their GemStone objects (temporary
+    /// objects survive an abort). A commit or abort in Smalltalk code is not noticed.
+    /// </para>
     /// </remarks>
     public int SaveChanges()
     {
@@ -78,6 +84,21 @@ public sealed partial class GsObjectContext : IDisposable
         run.Execute();
         return run.Stores;
     }
+
+    /// <summary>
+    /// <see cref="SaveChanges"/> and commit in one step. On a transaction conflict the session
+    /// aborts and the changes are written again on top of the newly committed state, up to
+    /// <paramref name="maxAttempts"/> times (<see cref="GciSession.RunInTransaction{T}(Func{GciSession, T}, int)"/>).
+    /// </summary>
+    /// <returns>What the last <see cref="SaveChanges"/> returned.</returns>
+    /// <exception cref="GciTransactionConflictException">Still a conflict after the last attempt; the changes are unsaved again.</exception>
+    /// <remarks>
+    /// Properties changed here overwrite what other sessions committed to the same properties;
+    /// other properties and untouched collection elements keep the other sessions' changes. To
+    /// let the user decide instead, call <see cref="SaveChanges"/> and <see cref="GciSession.Commit"/>
+    /// yourself and handle the conflict.
+    /// </remarks>
+    public int SaveChangesAndCommit(int maxAttempts = 3) => _session.RunInTransaction(_ => SaveChanges(), maxAttempts);
 
     /// <summary>
     /// Starts tracking a new object: <see cref="SaveChanges"/> creates it on the server. It only
@@ -113,6 +134,62 @@ public sealed partial class GsObjectContext : IDisposable
         _entries.Clear();
         _identity.Clear();
         _oops.Clear();
+        ForgetJournal();
+    }
+
+    // ---- Uncommitted saves -----------------------------------------------------------------
+
+    /// <summary>
+    /// How to take back the snapshot changes of saves since the last commit or abort, in the
+    /// order they were made. After an abort the server has the old state again, so the snapshots
+    /// must say so too: otherwise the next SaveChanges would think the changes were written and
+    /// send nothing.
+    /// </summary>
+    private readonly List<Action> _undo = [];
+
+    private bool _listening;
+
+    private void JournalProperty(EntityEntry entry, GsPropertyMap p)
+    {
+        var entity = entry.Entity;
+        var previous = entry.Properties.TryGetValue(p, out var snap) ? snap : null;
+        Journal(() =>
+        {
+            // A reload since the save may have replaced the entry: restore into the current one.
+            if (!_entries.TryGetValue(entity, out var current)) return;
+            if (previous is null) current.Properties.Remove(p);
+            else current.Properties[p] = previous;
+        });
+    }
+
+    private void JournalElements(CollectionSnapshot collection)
+    {
+        var previous = collection.Elements;
+        Journal(() => collection.Elements = previous);
+    }
+
+    private void Journal(Action undo)
+    {
+        _undo.Add(undo);
+        if (_listening) return;
+        _session.TransactionEnded += OnTransactionEnded;
+        _listening = true;
+    }
+
+    private void OnTransactionEnded(bool committed)
+    {
+        if (!committed)
+            for (var i = _undo.Count - 1; i >= 0; i--)
+                _undo[i]();
+        ForgetJournal();
+    }
+
+    private void ForgetJournal()
+    {
+        _undo.Clear();
+        if (!_listening) return;
+        _session.TransactionEnded -= OnTransactionEnded;
+        _listening = false;
     }
 
     private void ReleaseRetained()
@@ -405,7 +482,13 @@ public sealed partial class GsObjectContext : IDisposable
         {
             var entry = target.Entry;
             void Remember(GsPropertyMap p, Func<PropertySnapshot> snapshot) =>
-                _onSuccess.Add(() => (entry ?? newEntry!()).Properties[p] = snapshot());
+                _onSuccess.Add(() =>
+                {
+                    // New objects are temporary until the commit and keep their state on an
+                    // abort: only snapshots of existing objects are journaled.
+                    if (entry is not null) ctx.JournalProperty(entry, p);
+                    (entry ?? newEntry!()).Properties[p] = snapshot();
+                });
 
             foreach (var p in target.Map.Properties)
             {
@@ -481,7 +564,11 @@ public sealed partial class GsObjectContext : IDisposable
                     _ => PatchOrdered(collOop, shape, items, before, where),
                 };
                 Stores++;
-                _onSuccess.Add(() => old.Elements = elements());
+                _onSuccess.Add(() =>
+                {
+                    ctx.JournalElements(old);
+                    old.Elements = elements();
+                });
             }
 
             var isDict = shape.Kind == GsShapeKind.Dictionary;

@@ -49,7 +49,11 @@ public sealed partial class GciSession
         lock (Sync)
         {
             Activate();
-            if (GciNative.GciCommit()) return true;
+            if (GciNative.GciCommit())
+            {
+                OnTransactionEnded(committed: true);
+                return true;
+            }
             ThrowIfError(); // FALSE with an error report = real error
             return false;   // FALSE without = transaction conflict (GciCommit docs)
         }
@@ -61,8 +65,15 @@ public sealed partial class GciSession
         lock (Sync)
         {
             Activate();
-            GciNative.GciAbort();
-            ThrowIfError();
+            try
+            {
+                GciNative.GciAbort();
+                ThrowIfError();
+            }
+            finally
+            {
+                OnTransactionEnded(committed: false);
+            }
         }
     }
 
@@ -72,8 +83,15 @@ public sealed partial class GciSession
         lock (Sync)
         {
             Activate();
-            GciNative.GciBegin();
-            ThrowIfError();
+            try
+            {
+                GciNative.GciBegin();
+                ThrowIfError();
+            }
+            finally
+            {
+                OnTransactionEnded(committed: false);
+            }
         }
     }
 
@@ -145,6 +163,16 @@ public sealed partial class GciSession
         ArgumentNullException.ThrowIfNull(work);
         RunInTransaction<object?>(s => { work(s); return null; }, maxAttempts);
     }
+
+    /// <summary>
+    /// Raised after a commit (true) or an abort (false, also <see cref="Begin"/>, which aborts a
+    /// transaction in progress) through this API. <see cref="Mapping.GsObjectContext"/> uses it to
+    /// take back what it saved but was not committed. A commit or abort in Smalltalk code
+    /// (<c>System abortTransaction</c>) is not seen.
+    /// </summary>
+    internal event Action<bool>? TransactionEnded;
+
+    internal void OnTransactionEnded(bool committed) => TransactionEnded?.Invoke(committed);
 
     private string? TryGetConflictReport()
     {
