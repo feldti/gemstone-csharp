@@ -159,6 +159,63 @@ public sealed partial class GsObjectContext
 
     private bool _ownRoot;
 
+    /// <summary>
+    /// Loads the objects with these OOPs again, in one load, into the same instances, e.g. the
+    /// <see cref="GciSignals.ChangedObjects"/> a <see cref="GciSignalListener"/> reports. Abort
+    /// (or commit) the session first to see what other sessions committed.
+    /// </summary>
+    /// <param name="oops">
+    /// OOPs of objects this context has loaded. A collection that a loaded object holds in a
+    /// property refreshes that object. Other OOPs are ignored.
+    /// </param>
+    /// <param name="options">As for <see cref="Load{T}(Oop, GsLoadOptions?)"/>: everything the
+    /// mapping reaches from the refreshed objects is loaded again too.</param>
+    /// <returns>The refreshed objects (each once).</returns>
+    /// <exception cref="GsUnsavedChangesException">A refreshed object has unsaved changes; nothing was changed
+    /// (unless <see cref="GsLoadOptions.DiscardLocalChanges"/>).</exception>
+    public IReadOnlyList<object> Refresh(IEnumerable<Oop> oops, GsLoadOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(oops);
+        options ??= new GsLoadOptions();
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.Depth, 1, nameof(options));
+
+        var entities = new List<object>();
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        Dictionary<Oop, object>? owners = null;
+        foreach (var oop in oops)
+        {
+            if (!_identity.TryGetValue(oop, out var entity))
+            {
+                owners ??= CollectionOwners();
+                if (!owners.TryGetValue(oop, out entity)) continue;
+            }
+            if (seen.Add(entity)) entities.Add(entity);
+        }
+        if (entities.Count == 0) return [];
+
+        var roots = entities.Select(e => (_oops[e], Prepare(e.GetType()), $"{e.GetType().Name} {_oops[e]}")).ToList();
+        var load = new LoadRun(this, options, callerOwnsRoot: false);
+        load.Discover(roots);
+        load.Build(roots);
+        return entities;
+    }
+
+    /// <summary>Collections held in properties of tracked objects (also nested ones), with their owner.</summary>
+    private Dictionary<Oop, object> CollectionOwners()
+    {
+        var owners = new Dictionary<Oop, object>();
+        void Add(CollectionSnapshot c, object owner)
+        {
+            owners.TryAdd(c.Oop, owner);
+            foreach (var e in c.Elements)
+                if (e.Nested is { } nested) Add(nested, owner);
+        }
+        foreach (var entry in _entries.Values)
+            foreach (var snap in entry.Properties.Values)
+                if (snap.Collection is { } c) Add(c, entry.Entity);
+        return owners;
+    }
+
     /// <summary>OOP of an object loaded by this context.</summary>
     public bool TryGetOop(object entity, out Oop oop) => _oops.TryGetValue(entity, out oop);
 
@@ -394,7 +451,10 @@ public sealed partial class GsObjectContext
 
         // ---- Phase 1: fetch everything the mapping needs ----
 
-        public void Discover(Oop root, GsShape shape)
+        public void Discover(Oop root, GsShape shape) => Discover([(root, shape, "root")]);
+
+        /// <summary>Several roots in one go: one traversal for all of them, then the same rounds as for one.</summary>
+        public void Discover(IReadOnlyList<(Oop Oop, GsShape Shape, string Where)> roots)
         {
             var visited = new HashSet<(Oop, GsShape)>();
             var queue = new Queue<(Oop Oop, GsShape Shape, string Where)>();
@@ -402,8 +462,9 @@ public sealed partial class GsObjectContext
             var missing = new HashSet<Oop>();
             var toFlatten = new HashSet<Oop>();
 
-            if (NeedsReport(root, shape)) Fetch([root]);
-            queue.Enqueue((root, shape, "root"));
+            Oop[] fetch = [.. roots.Where(r => NeedsReport(r.Oop, r.Shape)).Select(r => r.Oop).Distinct()];
+            if (fetch.Length > 0) Fetch(fetch);
+            foreach (var r in roots) queue.Enqueue(r);
             while (true)
             {
                 while (queue.TryDequeue(out var node))
@@ -541,7 +602,9 @@ public sealed partial class GsObjectContext
         /// <summary>Mapped objects the load reaches, with the C# type they are loaded as.</summary>
         private readonly List<(Oop Oop, Type Type)> _reached = [];
 
-        public object? Build(Oop root, GsShape shape, string where)
+        public object? Build(Oop root, GsShape shape, string where) => Build([(root, shape, where)])[0];
+
+        public object?[] Build(IReadOnlyList<(Oop Oop, GsShape Shape, string Where)> roots)
         {
             // Before anything changes: refreshing an instance must not silently drop unsaved changes.
             if (!options.DiscardLocalChanges) ctx.ThrowIfUnsavedChanges(_reached);
@@ -551,14 +614,16 @@ public sealed partial class GsObjectContext
                 var values = _session.ToValues(pending);
                 for (var i = 0; i < pending.Length; i++) _converted[pending[i]] = values[i];
             }
-            _root = root;
-            var result = Value(root, shape, where, null);
+            _root = roots.Count == 1 ? roots[0].Oop : Oop.Illegal;
+            var results = new object?[roots.Count];
+            for (var i = 0; i < roots.Count; i++)
+                results[i] = Value(roots[i].Oop, roots[i].Shape, roots[i].Where, null);
             while (_fill.TryDequeue(out var job))
                 Fill(job.Instance, job.Oop, job.Map);
             if (options.TrackChanges)
                 // Root passed in by the caller: the caller keeps it alive (and may release it).
                 ctx.RetainAll(_toRetain.Where(o => !(callerOwnsRoot && o == _root)));
-            return result;
+            return results;
         }
 
         private void Fill(object instance, Oop oop, GsTypeMap map)

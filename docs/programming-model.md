@@ -150,8 +150,8 @@ ctx.TryGetOop(customer, out var oop);
 listener.Watch(oop);                                 // committed objects only
 listener.SignalsReceived += (_, e) =>                // on the UI thread if Start was called there
 {
-    foreach (var changed in e.Signals.ChangedObjects)
-        if (ctx.TryGetEntity(changed, out var entity)) MarkStale(entity);
+    session.Abort();                                 // see what the others committed
+    ctx.Refresh(e.Signals.ChangedObjects);           // reload them into the same instances
     foreach (var m in e.Signals.Messages)
         Console.WriteLine($"session {m.SenderSerial} sent {m.Value}: {m.Message}");
 };
@@ -172,8 +172,10 @@ Things to know:
 - **Use a session that does nothing else:** each wait or poll aborts it, and a wait occupies it.
   `Watch`, `Unwatch` and `Poll` interrupt a wait in progress (nothing gets lost).
 - **A notification is a hint, not the data.** To see the change, the session that works with
-  the objects aborts (or commits) and loads them again. Unsaved local changes are protected:
-  that load throws a `GsUnsavedChangesException` instead of overwriting them.
+  the objects aborts (or commits) and loads them again: `ctx.Refresh(oops)` reloads all
+  reported objects in one load, into the same instances. A reported collection refreshes the
+  object that holds it; OOPs the context has not loaded are ignored. Unsaved local changes are
+  protected: `Refresh` throws a `GsUnsavedChangesException` instead of overwriting them.
 - **Signal texts are byte Strings on the server:** only characters up to U+00FF (Latin-1).
   `SendSignal` rejects anything else with an `ArgumentException`.
 - **Signals are not stored permanently.** They live in the receiving session until read, and

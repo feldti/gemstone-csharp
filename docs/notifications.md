@@ -36,7 +36,11 @@ the writer send a signal after the commit.
 ```csharp
 using var listener = new GciSignalListener(listenerSession);   // a session only for this
 listener.Watch(oop1, oop2);                                      // committed objects
-listener.SignalsReceived += (_, e) => { /* e.Signals.ChangedObjects, e.Signals.Messages */ };
+listener.SignalsReceived += (_, e) =>
+{
+    workSession.Abort();                    // the session the windows load with
+    ctx.Refresh(e.Signals.ChangedObjects);  // one load for all, same instances
+};
 listener.PollFailed += (_, e) => { /* e.Error, e.Stopped */ };
 listener.Start();                                                // wait on the server in the background
 ...
@@ -148,8 +152,10 @@ Applications that so far kept their data in memory and distributed changes as me
   repeated (`SaveChangesAndCommit`). Classes such as `RcCounter`, `RcQueue` and
   `RcIdentityBag` avoid such conflicts where many sessions write to the same object.
 - **Distribution is a notification.** With the notify set, no message has to be sent at all:
-  the listener of every client learns which watched objects changed, and the windows reload
-  them (`GsObjectContext.TryGetEntity` leads from the OOP to the loaded C# object).
+  the listener of every client learns which watched objects changed, and
+  `GsObjectContext.Refresh` reloads them into the instances the windows show. With data
+  binding (`INotifyPropertyChanged` on the mapped classes) the windows update themselves,
+  because the mapper sets the properties.
 - **Messages that must not get lost** go into a persistent queue that the writer fills in the
   same transaction, with a signal as a doorbell. A client that was not running reads what it
   missed when it starts. Signals alone are not stored: they disappear with the receiving

@@ -110,6 +110,65 @@ public class GsSaveChangesIntegrationTests(MappingFixture fixture) : IClassFixtu
     }
 
     [StoneFact]
+    public void RefreshReloadsSeveralObjectsInOneLoad()
+    {
+        var first = NewAccount();
+        var second = NewAccount();
+        using var ctx = NewContext();
+        var a = ctx.Load<Account>($"UserGlobals at: #{first}");
+        var b = ctx.Load<Account>($"UserGlobals at: #{second}");
+        var order = a.Orders[0];
+        ctx.TryGetOop(a, out var aOop);
+        ctx.TryGetOop(b, out var bOop);
+
+        // Changed by someone else (here: Smalltalk in the same session).
+        S.Execute($"(UserGlobals at: #{first}) instVarNamed: 'accName' put: 'Anna'. (UserGlobals at: #{second}) instVarNamed: 'accName' put: 'Bert'. ((UserGlobals at: #{first}) instVarNamed: 'orderList') first instVarNamed: 'number' put: 99. true");
+
+        var calls = S.CallCount;
+        var refreshed = ctx.Refresh([aOop, bOop, aOop, Oop.FromSmallInteger(1), Oop.Nil]);
+        var refreshCalls = S.CallCount - calls;
+        Assert.Equal([a, b], refreshed);
+        Assert.Equal(("Anna", "Bert"), (a.Name, b.Name));
+        Assert.Same(order, a.Orders[0]);                // same instances, refreshed below the root too
+        Assert.Equal(99, order.Number);
+        Assert.Equal(0, ctx.SaveChanges());             // the snapshots are the server's state
+
+        // One load for both: no more calls than loading one of them.
+        calls = S.CallCount;
+        ctx.Load<Account>(aOop);
+        Assert.InRange(refreshCalls, 1, S.CallCount - calls);
+        Assert.Empty(ctx.Refresh([]));
+    }
+
+    [StoneFact]
+    public void RefreshThroughACollectionRefreshesItsOwner()
+    {
+        var key = NewAccount();
+        using var ctx = NewContext();
+        var a = ctx.Load<Account>($"UserGlobals at: #{key}");
+        var orders = S.Execute($"(UserGlobals at: #{key}) instVarNamed: 'orderList'"); // what a listener would watch
+        S.Execute($"((UserGlobals at: #{key}) instVarNamed: 'orderList') add: (((UserGlobals at: #GsMapTestOrder) new) instVarNamed: 'number' put: 7; instVarNamed: 'total' put: 1.0; yourself). true");
+
+        Assert.Equal([a], ctx.Refresh([orders]));
+        Assert.Equal([1L, 7L], a.Orders.Select(o => (long)o.Number));
+        S.Release(orders);
+    }
+
+    [StoneFact]
+    public void RefreshProtectsUnsavedChanges()
+    {
+        var key = NewAccount();
+        using var ctx = NewContext();
+        var a = ctx.Load<Account>($"UserGlobals at: #{key}");
+        ctx.TryGetOop(a, out var oop);
+        a.Name = "local";
+        Assert.Same(a, Assert.Single(Assert.Throws<GsUnsavedChangesException>(() => ctx.Refresh([oop])).Entities));
+        Assert.Equal("local", a.Name);
+        ctx.Refresh([oop], new GsLoadOptions { DiscardLocalChanges = true });
+        Assert.Equal("Dora", a.Name);
+    }
+
+    [StoneFact]
     public void DiscardLocalChangesOverwritesThem()
     {
         var key = NewAccount();

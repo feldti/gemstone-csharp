@@ -368,7 +368,7 @@ public sealed class GciSignalIntegrationTests : IDisposable
             Assert.Same(address, entity);
             Assert.Equal("Bonn", address.City);
             W.Abort();
-            ctx.Load<SignalTestAddress>(changed[0]);
+            Assert.Equal([address], ctx.Refresh(changed));
             Assert.Equal("Köln", address.City);
         }
         finally
