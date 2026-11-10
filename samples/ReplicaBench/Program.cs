@@ -64,7 +64,7 @@ switch (args.FirstOrDefault())
         using var c = new GsObjectContext(session, GsGeneratedMappings.Default);
         session.Abort();
         listener.Enabled = true;
-        c.Load<BenchRoot>(RootName, new GsLoadOptions { TrackChanges = false });
+        c.Load<BenchRoot>(RootName, new GsLoadOptions { TrackChanges = false, Clamp = Environment.GetEnvironmentVariable("BENCH_NOCLAMP") is null });
         listener.Enabled = false;
         var total = listener.ByType.Values.Sum();
         Console.WriteLine($"sampled {total / 1e6:F0} MB");
@@ -79,8 +79,9 @@ switch (args.FirstOrDefault())
         var rounds = args.Length > 0 && int.TryParse(args[0], out var r) ? r : 2;
         for (var i = 0; i < rounds; i++)
         {
-            Measure("tracked  ", new GsLoadOptions());
-            Measure("untracked", new GsLoadOptions { TrackChanges = false });
+            var useClamp = Environment.GetEnvironmentVariable("BENCH_NOCLAMP") is null;
+            Measure("tracked  ", new GsLoadOptions { Clamp = useClamp });
+            Measure("untracked", new GsLoadOptions { TrackChanges = false, Clamp = useClamp });
         }
         break;
 }

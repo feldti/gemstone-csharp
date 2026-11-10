@@ -131,6 +131,7 @@ public sealed partial class GsObjectContext : IDisposable
         {
             _retained.Clear(); // the session is unusable; the gem drops its export set at logout
         }
+        _clampSpec = Oop.Illegal;
         _entries.Clear();
         _identity.Clear();
         _untrackedCollectionOwners.Clear();

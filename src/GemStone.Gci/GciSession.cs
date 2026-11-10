@@ -345,6 +345,19 @@ public sealed partial class GciSession : IDisposable
     /// makes this session the GCI's current session.
     /// </summary>
     /// <summary>Number of GCI calls made through <see cref="Activate"/> (roughly: round trips), for tests.</summary>
+    /// <summary>
+    /// The object mapper's ClampSpecification per instVarLevelsSelector: one for all mappings used
+    /// in this session, kept in the export set until logout. Guarded by <see cref="Sync"/>.
+    /// </summary>
+    internal Dictionary<string, ClampState> ClampSpecs { get; } = [];
+
+    internal sealed class ClampState
+    {
+        public Oop Spec = Oop.Illegal;
+        /// <summary>GemStone class → instance variables some mapping follows.</summary>
+        public readonly Dictionary<Oop, HashSet<string>> Followed = [];
+    }
+
     internal long CallCount { get; private set; }
 
     private void Activate()

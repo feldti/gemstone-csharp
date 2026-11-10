@@ -338,6 +338,27 @@ public class GsMappingIntegrationTests(MappingFixture fixture) : IClassFixture<M
     }
 
     [StoneFact]
+    public void ClampingLoadsTheSameWithLessTraffic()
+    {
+        // Alice has an unmapped instance variable with an Array of 1000 slots: with clamping the
+        // traversal does not follow it; the loaded objects are the same.
+        string Describe(List<Account> accounts) => string.Join("; ", accounts.Select(a =>
+            $"{a.Name} {a.Balance} {a.Address?.City} {a.Status} {a.Opened} {a.Extra} [{string.Join(",", a.Tags.OrderBy(t => t, StringComparer.Ordinal))}] " +
+            string.Join(",", a.Orders.Select(o => $"{o.Number}:{o.Total}:{o.Account?.Name}:{(o.Lines is null ? "-" : string.Join("/", o.Lines.OrderBy(l => l.Key, StringComparer.Ordinal)))}"))));
+
+        using var clamped = NewContext();
+        var withClamp = Describe(clamped.Load<List<Account>>("UserGlobals at: #GsMapTestAccounts"));
+        var clampedReports = clamped.LastLoadReports;
+        using var plain = NewContext();
+        var without = Describe(plain.Load<List<Account>>("UserGlobals at: #GsMapTestAccounts", new GsLoadOptions { Clamp = false }));
+
+        Assert.Equal(without, withClamp);
+        Assert.True(clampedReports < plain.LastLoadReports, $"{clampedReports} reports with clamping, {plain.LastLoadReports} without");
+        Assert.Throws<ArgumentException>(() => NewContext().Load<List<Account>>("UserGlobals at: #GsMapTestAccounts",
+            new GsLoadOptions { ClampLevelsSelector = "not a selector" }));
+    }
+
+    [StoneFact]
     public void LoadingDoesNotGrowTheExportSet()
     {
         long Size() => S.Evaluate<long>("System hiddenSetSize: (System HiddenSetSpecifiers indexOf: 'PureExportSet')");

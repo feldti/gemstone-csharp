@@ -164,7 +164,9 @@ var company = ctx.Load<CompanyView>("Companies current");
 var district = company.Markets[0].Top!.Children[3].Children[2];    // plain C# from here on
 ```
 
-- **Unmapped instance variables** are not loaded at all.
+- **Unmapped instance variables** are not loaded at all, and the traversal does not even follow
+  them (nor `Oop` properties, nor the internal parts of RC collections): the context builds a
+  GemStone ClampSpecification from the mapping. `new GsLoadOptions { Clamp = false }` turns that off.
 - **A property of type `Oop`** (or `List<Oop>`) keeps the reference without loading the
   target. Use it for ways back to the parent and for cross references. Load the target when it
   is needed: `ctx.Load<RegionView>(district.Parent)`. An `Oop` property nobody set is written

@@ -34,6 +34,21 @@ public sealed record GsLoadOptions
     /// yet; set this to overwrite them with the server's state instead.
     /// </summary>
     public bool DiscardLocalChanges { get; init; }
+
+    /// <summary>
+    /// Traverse with a ClampSpecification built from the mapping (GciClampedTrav): instance
+    /// variables that are not mapped or mapped as <see cref="Oop"/>, and the internal parts of
+    /// RcIdentityBags, are not followed. Less to transfer and decode; the loaded objects are the same.
+    /// </summary>
+    public bool Clamp { get; init; } = true;
+
+    /// <summary>
+    /// The ClampSpecification's instVarLevelsSelector: a unary selector that answers nil for the
+    /// objects a load reaches. It must not be nil: GemStone 3.6.5 to 3.7.6 crash the gem then
+    /// (docs/bugreport-gciclampedtrav.md). The default <c>myDependents</c> answers nil for objects
+    /// without (Monticello) dependents; for an object with dependents the clamps are ignored.
+    /// </summary>
+    public string ClampLevelsSelector { get; init; } = "myDependents";
 }
 
 /// <summary>Mapping errors: either the mapping does not fit the image, or a value does not fit its property.</summary>
@@ -98,6 +113,13 @@ public sealed partial class GsObjectContext
     private readonly Dictionary<(Oop Sub, Oop Super), bool> _subclassCache = [];
     private readonly Dictionary<Oop, CollectionClass> _collectionCache = [];
     private readonly Dictionary<string, Oop> _kernelClasses = [];
+    // Resolved type maps (class OOP and instVar indexes known): the source of the ClampSpecification.
+    private readonly List<GsTypeMap> _resolvedMaps = [];
+    private Oop _clampSpec = Oop.Illegal;                   // owned by the session, see GciSession.ClampSpecs
+    private (int Maps, string Selector) _clampSpecFor;
+
+    /// <summary>Object reports the traversals of the last load or refresh delivered (for tests and measurements).</summary>
+    internal long LastLoadReports { get; private set; }
     // Objects loaded without TrackChanges have no snapshots; this lighter index still lets Refresh
     // find the owner of a reported collection (e.g. an RC bag a new result was added to).
     private readonly Dictionary<Oop, List<object>> _untrackedCollectionOwners = [];
@@ -315,7 +337,71 @@ public sealed partial class GsObjectContext
             _shapes = new GsShapeFactory(_mappings);
             throw GsMappingException.For(errors);
         }
+        _resolvedMaps.AddRange(maps);
         return shape;
+    }
+
+    /// <summary>
+    /// Traversal options for a load: with a ClampSpecification that stops at instance variables the
+    /// mapping does not need. Built once, and again when new types were mapped since.
+    /// </summary>
+    private GciTraversalOptions StartLoad(GsLoadOptions options)
+    {
+        LastLoadReports = 0;
+        return TraversalOptions(options);
+    }
+
+    private GciTraversalOptions TraversalOptions(GsLoadOptions options)
+    {
+        var travOptions = new GciTraversalOptions { BufferSize = options.BufferSize };
+        if (!options.Clamp || _resolvedMaps.Count == 0) return travOptions;
+        if (!Identifier().IsMatch(options.ClampLevelsSelector))
+            throw new ArgumentException($"'{options.ClampLevelsSelector}' is not a unary selector.", nameof(options));
+        lock (GciSession.Sync)
+        {
+            if (!_session.ClampSpecs.TryGetValue(options.ClampLevelsSelector, out var state))
+                _session.ClampSpecs[options.ClampLevelsSelector] = state = new GciSession.ClampState();
+            if (_clampSpecFor != (_resolvedMaps.Count, options.ClampLevelsSelector) || _clampSpec != state.Spec)
+            {
+                // One specification per session (and selector) for all mappings used in it: an
+                // instance variable is cut only if no mapping needs it. Rebuilt when a mapping adds a
+                // class or a followed instance variable; contexts hold nothing in the export set.
+                var changed = state.Spec == Oop.Illegal;
+                foreach (var map in _resolvedMaps)
+                {
+                    if (!state.Followed.TryGetValue(map.ClassOop, out var followed))
+                    {
+                        state.Followed[map.ClassOop] = followed = new HashSet<string>(StringComparer.Ordinal);
+                        changed = true;
+                    }
+                    foreach (var p in map.Properties)
+                        if (p.Shape.Kind != GsShapeKind.Oop && followed.Add(p.InstVar))
+                            changed = true;
+                }
+                if (changed)
+                {
+                    var entries = new StringBuilder();
+                    foreach (var cls in state.Followed.OrderBy(kv => kv.Key.Value))
+                        entries.Append($"{{Object _objectForOop: {cls.Key.Value}. #({string.Join(" ", cls.Value.OrderBy(n => n, StringComparer.Ordinal).Select(n => "#" + n))})}}. ");
+                    // The previous specification is not released: a load of another context on
+                    // this session may still use it. Only a new mapping makes a new one.
+                    state.Spec = _session.Execute($$"""
+                        | levels spec |
+                        levels := { {RcIdentityBag . #(#components 0)} }.
+                        { {{entries}} } do: [:e | | cls followed pairs |
+                            cls := e at: 1. followed := e at: 2. pairs := {}.
+                            cls allInstVarNames do: [:n | (followed includes: n) ifFalse: [pairs := pairs, {n. 0}]].
+                            pairs isEmpty ifFalse: [levels := levels, { {cls. pairs} }]].
+                        spec := ClampSpecification newWithIdClamps: #() classClamps: #() instVarLevels: levels.
+                        spec instVarLevelsSelector: #{{options.ClampLevelsSelector}}.
+                        spec
+                        """);
+                }
+                _clampSpec = state.Spec;
+                _clampSpecFor = (_resolvedMaps.Count, options.ClampLevelsSelector);
+            }
+        }
+        return travOptions with { ClampSpec = _clampSpec };
     }
 
     private const string IdentifierRegex = @"^[A-Za-z_][A-Za-z0-9_]*$";
@@ -504,7 +590,7 @@ public sealed partial class GsObjectContext
         private readonly Dictionary<Oop, object?> _converted = [];
         private readonly Dictionary<(Oop, GsTypeMap), GsTypeMap> _actualMaps = [];
         private readonly Queue<(object Instance, Oop Oop, GsTypeMap Map)> _fill = new();
-        private readonly GciTraversalOptions _travOptions = new() { BufferSize = options.BufferSize };
+        private readonly GciTraversalOptions _travOptions = ctx.StartLoad(options);
 
         // ---- Phase 1: fetch everything the mapping needs ----
 
@@ -594,6 +680,7 @@ public sealed partial class GsObjectContext
         private void Fetch(Oop[] roots)
         {
             var t = _session.Traverse(roots, options.Depth, _travOptions);
+            ctx.LastLoadReports += t.Reports.Count;
             foreach (var r in t.Reports) _reports[r.Oop] = r;
         }
 
