@@ -1,6 +1,6 @@
 # GciClampedTrav crashes the gem (SIGSEGV) when a ClampSpecification has instance variable levels and no instVarLevelsSelector
 
-**Product:** GemStone/S 64 Bit 3.7.6 (x86-64 Linux); other versions not tested yet
+**Product:** GemStone/S 64 Bit 3.6.5, 3.6.8, 3.7.2, 3.7.5 and 3.7.6 (x86-64 Linux)
 **Component:** GemBuilder for C, `GciClampedTrav` (gem side `GemTravClampedTraversal`, `findNextOopToReport`)
 **Severity:** gem process crashes; the client session is lost
 
@@ -68,6 +68,9 @@ linkgc socketReadError, socket read EOF
   session OK: 3 + 4 = 7
 ```
 
+The output is the same with 3.6.5, 3.6.8, 3.7.2 and 3.7.5 (program built against the headers
+and `gcirtlobj.o` of each version): cases 3 and 4 crash the gem, cases 1, 2 and 5 complete.
+
 Case 5 shows the intended behaviour: with a selector that answers nil, the same
 ClampSpecification works, and the clamp takes effect (208 instead of 264 bytes: the value of
 the Association is not reported).
@@ -94,6 +97,11 @@ Gemstone Signal Handler: Signal 11, SIGSEGV Received
 #18 GemTravClampedTraversal_ (...)
 #19 GemTravClampedTraversal (...)
 ```
+
+The other versions show the same path (`findNextOopToReport` → method lookup with selector id 0 →
+`methodLookupCacheAtPut`); in 3.6.5 the frames read
+`om::methodLookup (..., selectorId=16, selectorId@entry=0)` → `om::fullMethodLookup` →
+`om::methodLookupCacheAtPut (..., selectorId=0, ...)`.
 
 `findNextOopToReport` sends the `instVarLevelsSelector` without checking it for nil. The
 nil selector arrives as selector id 0, and `fullMethodLookup` crashes on it.
