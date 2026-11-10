@@ -98,6 +98,9 @@ public sealed partial class GsObjectContext
     private readonly Dictionary<(Oop Sub, Oop Super), bool> _subclassCache = [];
     private readonly Dictionary<Oop, CollectionClass> _collectionCache = [];
     private readonly Dictionary<string, Oop> _kernelClasses = [];
+    // Objects loaded without TrackChanges have no snapshots; this lighter index still lets Refresh
+    // find the owner of a reported collection (e.g. an RC bag a new result was added to).
+    private readonly Dictionary<Oop, List<object>> _untrackedCollectionOwners = [];
     private readonly Dictionary<Oop, string> _classNames = [];
 
     /// <summary>A context that finds the mapping metadata by reflection.</summary>
@@ -222,7 +225,10 @@ public sealed partial class GsObjectContext
         return entities;
     }
 
-    /// <summary>Collections held in properties of tracked objects (also nested ones), with their owner.</summary>
+    /// <summary>
+    /// Collections held in properties of loaded objects, with their owner: for tracked objects also
+    /// nested ones (from the snapshots), for untracked objects the outer collection.
+    /// </summary>
     private Dictionary<Oop, List<object>> CollectionOwners()
     {
         var owners = new Dictionary<Oop, List<object>>();
@@ -236,7 +242,20 @@ public sealed partial class GsObjectContext
         foreach (var entry in _entries.Values)
             foreach (var snap in entry.Properties.Values)
                 if (snap.Collection is { } c) Add(c, entry.Entity);
+        foreach (var pair in _untrackedCollectionOwners)
+        {
+            if (!owners.TryGetValue(pair.Key, out var list)) owners[pair.Key] = list = [];
+            foreach (var owner in pair.Value)
+                if (!list.Contains(owner)) list.Add(owner);
+        }
         return owners;
+    }
+
+    private void RememberCollectionOwner(Oop collection, object owner)
+    {
+        if (!_untrackedCollectionOwners.TryGetValue(collection, out var list))
+            _untrackedCollectionOwners[collection] = list = [];
+        if (!list.Contains(owner)) list.Add(owner);
     }
 
     /// <summary>OOP of an object loaded by this context.</summary>
@@ -686,7 +705,11 @@ public sealed partial class GsObjectContext
                     _toRetain.Add(ivOop);
                 }
                 else
+                {
                     value = Value(ivOop, p.Shape, p.Path, p);
+                    if (entry is null && p.Shape.IsCollection && !ivOop.IsSpecial)
+                        ctx.RememberCollectionOwner(ivOop, instance);
+                }
                 if (value is null && p.PropertyType.IsValueType && Nullable.GetUnderlyingType(p.PropertyType) is null)
                     throw GsMappingException.For($"{p.Path}: nil cannot be assigned to {p.PropertyType.Name} ({oop}).");
                 p.Set(instance, value);

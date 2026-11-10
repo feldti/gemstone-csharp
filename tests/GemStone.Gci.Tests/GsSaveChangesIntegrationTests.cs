@@ -215,6 +215,22 @@ public class GsSaveChangesIntegrationTests(MappingFixture fixture) : IClassFixtu
     }
 
     [StoneFact]
+    public void RefreshThroughACollectionAlsoWorksWithoutTracking()
+    {
+        // A read-only replica (TrackChanges = false) has no snapshots, but still finds the owner.
+        var key = NewAccount();
+        using var ctx = NewContext();
+        var untracked = new GsLoadOptions { TrackChanges = false };
+        var a = ctx.Load<Account>($"UserGlobals at: #{key}", untracked);
+        var orders = S.Execute($"(UserGlobals at: #{key}) instVarNamed: 'orderList'");
+        S.Execute($"((UserGlobals at: #{key}) instVarNamed: 'orderList') add: (((UserGlobals at: #GsMapTestOrder) new) instVarNamed: 'number' put: 7; instVarNamed: 'total' put: 1.0; yourself). true");
+
+        Assert.Equal([a], ctx.Refresh([orders], untracked));
+        Assert.Equal([1L, 7L], a.Orders.Select(o => (long)o.Number));
+        S.Release(orders);
+    }
+
+    [StoneFact]
     public void RefreshProtectsUnsavedChanges()
     {
         var key = NewAccount();

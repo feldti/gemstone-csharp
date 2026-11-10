@@ -133,6 +133,7 @@ public sealed partial class GsObjectContext : IDisposable
         }
         _entries.Clear();
         _identity.Clear();
+        _untrackedCollectionOwners.Clear();
         _oops.Clear();
         ForgetJournal();
     }

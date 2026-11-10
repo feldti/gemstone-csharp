@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Load benchmark for a large object graph; usage in Program.cs. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\GemStone.Gci\GemStone.Gci.csproj" />
+    <ProjectReference Include="..\..\src\GemStone.Gci.Generators\GemStone.Gci.Generators.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
