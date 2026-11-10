@@ -546,6 +546,13 @@ internal static unsafe partial class GciNative
     }
     private static nint _GciTraverseObjs;
 
+    /// <summary>BoolType GciClampedTrav(const OopType *theOops, int numOops, GciClampedTravArgsSType *args);</summary>
+    public static bool GciClampedTrav(ulong* theOops, int numOops, GciClampedTravArgsSType* args)
+    {
+        return ((delegate* unmanaged[Cdecl]<ulong*, int, GciClampedTravArgsSType*, int>)Fn(ref _GciClampedTrav, "GciClampedTrav"))(theOops, numOops, args) != 0;
+    }
+    private static nint _GciClampedTrav;
+
     /// <summary>BoolType GciMoreTraversal(GciTravBufType *travBuff);</summary>
     public static bool GciMoreTraversal(byte* travBuff)
     {

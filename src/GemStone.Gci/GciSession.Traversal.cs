@@ -34,7 +34,14 @@ public sealed partial class GciSession
             fixed (Oop* p = roots)
             {
                 Activate();
-                done = GciNative.GciTraverseObjs((ulong*)p, roots.Length, buffer.Pointer, level);
+                if (options.ClampSpec is { } clamp)
+                {
+                    var travArgs = GciClampedTravArgsSType.Create(buffer.Pointer, level, retrievalFlags: 0);
+                    travArgs.ClampSpec = clamp.Value;
+                    done = GciNative.GciClampedTrav((ulong*)p, roots.Length, &travArgs);
+                }
+                else
+                    done = GciNative.GciTraverseObjs((ulong*)p, roots.Length, buffer.Pointer, level);
                 ThrowIfError();
             }
             var reports = CollectAll(buffer, done);

@@ -46,6 +46,32 @@ switch (args.FirstOrDefault())
         using (var importer = GciSession.Login(net, Env("GS_USER", "DataCurator"), Env("GS_PASSWORD", "swordfish")))
             RefreshCheck(importer);
         break;
+    case "probe":
+        // What one traversal level 4 from a customer reports, by class.
+        var cust = session.Execute($"(UserGlobals at: #{RootName}) customers first");
+        var clamp = args.Length > 2 ? session.Execute(args[2]) : (Oop?)null;
+        var t = session.Traverse([cust], args.Length > 1 ? int.Parse(args[1]) : 4, new GciTraversalOptions { ClampSpec = clamp });
+        Console.WriteLine($"{t.Reports.Count} reports");
+        foreach (var g in t.Reports.GroupBy(r => r.Class).OrderByDescending(g => g.Count()))
+            Console.WriteLine($"  {g.Count(),6}  {session.PrintString(g.Key)}");
+        foreach (var rep in t.Reports.Where(x => session.PrintString(x.Class) is "RcIdentityBag" or "BenchCustomer"))
+            Console.WriteLine($"  {rep}  clamped={rep.IsClamped}  named=[{string.Join(" ", Enumerable.Range(1, rep.NamedSize).Select(rep.Named))}]  indexed={rep.Indexed.Count()}");
+        break;
+    case "alloc":
+    {
+        // Allocation sampling by type (AllocationTick, about every 100 KB), one untracked load.
+        using var listener = new AllocListener();
+        using var c = new GsObjectContext(session, GsGeneratedMappings.Default);
+        session.Abort();
+        listener.Enabled = true;
+        c.Load<BenchRoot>(RootName, new GsLoadOptions { TrackChanges = false });
+        listener.Enabled = false;
+        var total = listener.ByType.Values.Sum();
+        Console.WriteLine($"sampled {total / 1e6:F0} MB");
+        foreach (var (type, bytes) in listener.ByType.OrderByDescending(kv => kv.Value).Take(25))
+            Console.WriteLine($"  {bytes / 1e6,7:F0} MB  {bytes * 100.0 / total,5:F1}%  {type}");
+        break;
+    }
     case "feed":
         FeedBench(args.Length > 1 && int.TryParse(args[1], out var n) ? n : 200);
         break;
@@ -129,10 +155,16 @@ void Measure(string label, GsLoadOptions options)
     var memBefore = GC.GetTotalMemory(true);
     var calls = Calls();
     var cpu = Process.GetCurrentProcess().TotalProcessorTime;
+    var pause = GC.GetTotalPauseDuration();
+    var allocated = GC.GetTotalAllocatedBytes(precise: true);
+    var gcs = GC.CollectionCount(0);
     var sw = Stopwatch.StartNew();
     var root = ctx.Load<BenchRoot>(RootName, options);
     sw.Stop();
     cpu = Process.GetCurrentProcess().TotalProcessorTime - cpu;
+    pause = GC.GetTotalPauseDuration() - pause;
+    allocated = GC.GetTotalAllocatedBytes(precise: true) - allocated;
+    gcs = GC.CollectionCount(0) - gcs;
     var memAfter = GC.GetTotalMemory(true);
 
     // Walk the graph like the application would.
@@ -153,6 +185,7 @@ void Measure(string label, GsLoadOptions options)
     Console.WriteLine($"{label}: {objects:N0} objects in {sw.Elapsed.TotalSeconds:F2} s (client CPU {cpu.TotalSeconds:F2} s), " +
                       $"{Calls() - calls:N0} GCI calls, {(memAfter - memBefore) / 1e6:F0} MB managed, " +
                       $"walk {walk.Elapsed.TotalMilliseconds:F0} ms (checksum {sum})");
+    Console.WriteLine($"           GC: {gcs} collections, {pause.TotalSeconds:F2} s paused, {allocated / 1e6:F0} MB allocated");
 }
 
 // An untracked replica follows what another session commits: a changed position and a new order
@@ -363,4 +396,25 @@ public class BenchArticle : BenchEntity
     [GsInstVar("number")] public long Number { get; set; }
     [GsInstVar("name")] public string? Name { get; set; }
     [GsInstVar("price")] public double Price { get; set; }
+}
+
+sealed class AllocListener : System.Diagnostics.Tracing.EventListener
+{
+    public volatile bool Enabled;
+    public readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> ByType = new();
+
+    protected override void OnEventSourceCreated(System.Diagnostics.Tracing.EventSource source)
+    {
+        if (source.Name == "Microsoft-Windows-DotNETRuntime")
+            EnableEvents(source, System.Diagnostics.Tracing.EventLevel.Verbose, (System.Diagnostics.Tracing.EventKeywords)0x1); // GC
+    }
+
+    protected override void OnEventWritten(System.Diagnostics.Tracing.EventWrittenEventArgs e)
+    {
+        if (!Enabled || e.EventName is null || !e.EventName.StartsWith("GCAllocationTick", StringComparison.Ordinal) || e.PayloadNames is null) return;
+        var type = e.Payload![e.PayloadNames.IndexOf("TypeName")] as string ?? "?";
+        var i = e.PayloadNames.IndexOf("AllocationAmount64");
+        var amount = i >= 0 ? Convert.ToInt64(e.Payload[i]) : Convert.ToInt64(e.Payload[e.PayloadNames.IndexOf("AllocationAmount")]);
+        ByType.AddOrUpdate(type, amount, (_, v) => v + amount);
+    }
 }

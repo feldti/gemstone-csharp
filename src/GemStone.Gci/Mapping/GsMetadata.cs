@@ -150,6 +150,13 @@ public sealed class GsPropertyMetadata
 /// <summary>How a C# type is filled from a GemStone value (cached per type).</summary>
 internal sealed class GsShape
 {
+    // Shapes are compared by reference; a fixed hash avoids the runtime's identity hash
+    // (Discover keeps a HashSet of (Oop, GsShape) with one entry per reached object).
+    private static int s_nextHash;
+    private readonly int _hash = Interlocked.Increment(ref s_nextHash);
+    public override int GetHashCode() => _hash;
+    public override bool Equals(object? obj) => ReferenceEquals(this, obj);
+
     public required Type Type { get; init; }
     public required GsShapeKind Kind { get; init; }
 
@@ -205,7 +212,16 @@ internal sealed class GsPropertyMap
     /// <summary>1-based named instVar index in the GemStone class.</summary>
     public int Index { get; set; }
 
-    public string Path => $"{Metadata.Owner}.{Metadata.Name}";
+    // Computed once: Discover and Fill pass it for every property of every object (a load of
+    // 825,000 objects allocated about 1 GB of these strings when it was built on each access).
+    private string? _path;
+    public string Path => _path ??= $"{Metadata.Owner}.{Metadata.Name}";
+
+    private int _nilForbidden = -1;
+    /// <summary>A value type that is not <see cref="Nullable{T}"/>: nil cannot be assigned.</summary>
+    public bool NilForbidden => (_nilForbidden < 0
+        ? _nilForbidden = PropertyType.IsValueType && Nullable.GetUnderlyingType(PropertyType) is null ? 1 : 0
+        : _nilForbidden) == 1;
 }
 
 /// <summary>Builds shapes and type maps from the metadata of an <see cref="IGsMappingProvider"/>.</summary>

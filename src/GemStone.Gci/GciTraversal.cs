@@ -214,4 +214,11 @@ public sealed record GciTraversalOptions
     /// by default it is released after the traversal, like every other reported object.
     /// </summary>
     public bool KeepResult { get; init; }
+
+    /// <summary>
+    /// A ClampSpecification for <see cref="GciSession.Traverse(Oop[], int, GciTraversalOptions?)"/>
+    /// (GciClampedTrav): classes and instance variables the traversal does not follow. Null: no clamps
+    /// (GciTraverseObjs).
+    /// </summary>
+    public Oop? ClampSpec { get; init; }
 }

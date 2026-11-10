@@ -712,7 +712,7 @@ public sealed partial class GsObjectContext
                     if (entry is null && p.Shape.IsCollection && !ivOop.IsSpecial)
                         ctx.RememberCollectionOwner(ivOop, instance);
                 }
-                if (value is null && p.PropertyType.IsValueType && Nullable.GetUnderlyingType(p.PropertyType) is null)
+                if (value is null && p.NilForbidden)
                     throw GsMappingException.For($"{p.Path}: nil cannot be assigned to {p.PropertyType.Name} ({oop}).");
                 p.Set(instance, value);
                 if (entry is not null)
