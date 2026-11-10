@@ -4,5 +4,9 @@
 # Optional argument: substring filter on "Namespace.Class.Method".
 set -euo pipefail
 cd "$(dirname "$0")"
-dotnet build -c Debug -p:WithNet48Tests=true -v q -nologo >/dev/null
+# Quiet on success; on a build error show the output (and stop), instead of exiting silently.
+if ! out=$(dotnet build -c Debug -p:WithNet48Tests=true -v q -nologo 2>&1); then
+    echo "$out" >&2
+    exit 1
+fi
 exec mono bin/Debug/net48/Net48Runner.exe "$@"

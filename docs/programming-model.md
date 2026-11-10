@@ -320,6 +320,54 @@ A middle way is one session for all the windows that only display data, and an o
 each form that edits. "Cancel" in such a form is just disposing its context (and aborting its
 session).
 
+## A replica that follows the stone
+
+For an application that keeps a large part of the database in memory and navigates it in plain
+C#, `GsReplica<T>` loads the graph once and keeps it up to date. Writers (importers, other
+clients, Smalltalk code) tell it what they changed through a `GciChangeFeed`, a persistent queue
+in the stone:
+
+```csharp
+// once, e.g. by an admin tool
+GciChangeFeed.Install(session, "ChangeFeed");
+session.Commit();
+
+// the replica: a work session and a listener session
+using var ctx = new GsObjectContext(work, GsGeneratedMappings.Default);
+using var listener = new GciSignalListener(listenerSession);
+using var replica = new GsReplica<Company>(ctx, new GciChangeFeed(work, "ChangeFeed"), "client-17", listener, "Companies current");
+replica.Changed += (_, e) => RefreshWindows(e.Entities);   // after each update
+replica.Start();                                            // load, register, listen
+int count = replica.Read(c => c.Markets.Count);             // read under the read lock
+
+// a writer in C#
+feed.Publish(changedOops);                                  // in the same transaction as the change
+writer.Commit();
+feed.Ring();                                                // after the commit: the doorbell
+```
+
+A writer in Smalltalk does the same: `feed publish: changedObjects. System commitTransaction. feed ring`.
+
+- **Nothing gets lost.** Every consumer key has its own `RcQueue` in the stone, which collects
+  while the replica is not running. Signals are only the doorbell; the replica also looks every
+  `PollInterval` (5 s by default) in case one got lost.
+- **Parallel writers do not conflict:** an `RcQueue` takes additions from many sessions.
+- **Report the collection, not only the new element:** a writer that adds an order publishes the
+  collection it added it to; the replica then refreshes the object that holds that collection.
+- **The replica is loaded without change tracking** (half the time, a quarter of the memory).
+  Edit in a separate, small context with change tracking and save and commit there; the change
+  then comes back through the feed like any other.
+- **Readers and updates are synchronized:** `Read` holds the read lock; an update (abort, take,
+  refresh) holds the write lock only while it changes the objects.
+- **The replica owns its work session:** it aborts and commits it, and commits in the background.
+- **Unregister consumers you no longer need** (`feed.Unregister(key)`); otherwise their queues
+  keep growing.
+
+Measured with `samples/ReplicaBench` (825,000 objects, 3.7.6, everything on one machine): a
+change appears 6.8 ms (median) after the writer starts its commit, of which 5.7 ms are the commit
+itself (the stone writes its transaction log); with two writers committing about 100 times a
+second, 12 ms. No change was lost, no commit conflicted.
+
 ## Threads and several sessions
 
 - The classic GCI exists once per process, but **several sessions** are possible. Their calls

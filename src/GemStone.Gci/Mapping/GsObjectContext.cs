@@ -211,6 +211,11 @@ public sealed partial class GsObjectContext
                     if (seen.Add(e)) entities.Add(e);
                 continue;
             }
+            // Untracked objects: direct lookup (a replica holds many of them, no copying per refresh).
+            if (_untrackedCollectionOwners.TryGetValue(oop, out var untracked))
+                foreach (var e in untracked)
+                    if (seen.Add(e)) entities.Add(e);
+            if (_entries.Count == 0) continue;
             owners ??= CollectionOwners();
             if (owners.TryGetValue(oop, out var collectionOwners))
                 foreach (var e in collectionOwners)
@@ -226,8 +231,8 @@ public sealed partial class GsObjectContext
     }
 
     /// <summary>
-    /// Collections held in properties of loaded objects, with their owner: for tracked objects also
-    /// nested ones (from the snapshots), for untracked objects the outer collection.
+    /// Collections held in properties of tracked objects (also nested ones, from the snapshots),
+    /// with their owner. Untracked objects have <see cref="_untrackedCollectionOwners"/> instead.
     /// </summary>
     private Dictionary<Oop, List<object>> CollectionOwners()
     {
@@ -242,12 +247,6 @@ public sealed partial class GsObjectContext
         foreach (var entry in _entries.Values)
             foreach (var snap in entry.Properties.Values)
                 if (snap.Collection is { } c) Add(c, entry.Entity);
-        foreach (var pair in _untrackedCollectionOwners)
-        {
-            if (!owners.TryGetValue(pair.Key, out var list)) owners[pair.Key] = list = [];
-            foreach (var owner in pair.Value)
-                if (!list.Contains(owner)) list.Add(owner);
-        }
         return owners;
     }
 
@@ -257,6 +256,9 @@ public sealed partial class GsObjectContext
             _untrackedCollectionOwners[collection] = list = [];
         if (!list.Contains(owner)) list.Add(owner);
     }
+
+    /// <summary>The session this context loads from and saves to.</summary>
+    public GciSession Session => _session;
 
     /// <summary>OOP of an object loaded by this context.</summary>
     public bool TryGetOop(object entity, out Oop oop) => _oops.TryGetValue(entity, out oop);
