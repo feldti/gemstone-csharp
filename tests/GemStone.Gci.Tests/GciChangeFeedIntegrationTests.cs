@@ -191,6 +191,65 @@ public sealed class GciChangeFeedIntegrationTests : IDisposable
         Assert.Equal("Frieda", replica.Read(r => r.Name));
     }
 
+    [StoneFact]
+    public void SaveChangesPublishesInItsTransaction()
+    {
+        var feed = Feed(W);
+        feed.Register("one", W.GemSessionId);
+        W.Commit();
+
+        _writer!.Abort();
+        using var ctx = new GsObjectContext(_writer) { ChangeFeed = Feed(_writer) };
+        var item = ctx.Load<FeedItem>(Item);
+        Assert.True(ctx.TryGetOop(item, out var itemOop));
+        var child = item.Children[0];
+
+        ctx.SaveChanges();                                 // nothing changed: nothing published
+        child.Name = "a2";                                 // only the child changes
+        ctx.SaveChanges();
+        _writer.Abort();                                   // takes back the change and the publish
+        W.Abort();
+        Assert.Equal(0, feed.Pending("one"));
+
+        item.Children.Add(new FeedItem { Name = "c" });    // a collection of the item and a new object
+        ctx.SaveChangesAndCommit();                        // the child counts as changed again
+        Assert.True(ctx.TryGetOop(child, out var childOop));
+
+        W.Abort();
+        Assert.Equal(1, feed.Pending("one"));              // one publish per batch
+        Assert.Equal(new HashSet<Oop> { itemOop, childOop }, feed.Take("one").ToHashSet());
+        W.Commit();
+    }
+
+    [StoneFact]
+    public void SettingAFeedOfAnotherSessionThrows()
+    {
+        using var ctx = new GsObjectContext(_writer!);
+        Assert.Throws<ArgumentException>(() => ctx.ChangeFeed = Feed(W));
+    }
+
+    [StoneFact]
+    public async Task TheReplicaFollowsAMappedWriter()
+    {
+        using var ctx = new GsObjectContext(W);
+        using var listener = new GciSignalListener(_listen!);
+        using var replica = new GsReplica<FeedItem>(ctx, Feed(W), "replica", listener, Item) { PollInterval = TimeSpan.FromMinutes(5) };
+        var changed = new TaskCompletionSource<GsReplicaChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        replica.Changed += (_, e) => changed.TrySetResult(e);
+        await Task.Run(replica.Start);
+
+        // An importer written in C#: no Publish, no Ring.
+        _writer!.Abort();
+        using var importer = new GsObjectContext(_writer) { ChangeFeed = Feed(_writer) };
+        var item = importer.Load<FeedItem>(Item);
+        item.Name = "Gustav";
+        item.Children.Add(new FeedItem { Name = "d" });
+        importer.SaveChangesAndCommit();
+
+        await Within(changed.Task);                        // the doorbell, not the timer (5 minutes)
+        Assert.Equal(("Gustav", 2), replica.Read(r => (r.Name, r.Children.Count)));
+    }
+
     private static async Task<T> Within<T>(Task<T> task)
     {
         if (await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(10))) != task)

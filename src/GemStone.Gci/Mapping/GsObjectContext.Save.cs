@@ -75,6 +75,10 @@ public sealed partial class GsObjectContext : IDisposable
     /// writes them again. Objects created by SaveChanges keep their GemStone objects (temporary
     /// objects survive an abort). A commit or abort in Smalltalk code is not noticed.
     /// </para>
+    /// <para>
+    /// With a <see cref="ChangeFeed"/>, the batch also publishes the changed objects to it, in the
+    /// same transaction; the commit rings the doorbell.
+    /// </para>
     /// </remarks>
     public int SaveChanges()
     {
@@ -99,6 +103,37 @@ public sealed partial class GsObjectContext : IDisposable
     /// yourself and handle the conflict.
     /// </remarks>
     public int SaveChangesAndCommit(int maxAttempts = 3) => _session.RunInTransaction(_ => SaveChanges(), maxAttempts);
+
+    private GciChangeFeed? _changeFeed;
+
+    /// <summary>
+    /// Change feed that <see cref="SaveChanges"/> publishes to (null: none). Publishing follows the
+    /// transaction: the changed objects go to the feed in the same batch, and so in the same
+    /// transaction, as the changes; an abort takes them back with the changes (the next
+    /// SaveChanges writes and publishes them again). After a commit through this API
+    /// (<see cref="GciSession.Commit"/>, <see cref="SaveChangesAndCommit"/>, <see cref="GciSession.RunInTransaction{T}(Func{GciSession, T}, int)"/> …)
+    /// the context rings the doorbell once.
+    /// </summary>
+    /// <remarks>
+    /// Published are the tracked objects SaveChanges wrote to: a changed property, or a changed
+    /// collection held by a property (the owner, not the collection). New objects are not
+    /// published; they become reachable through a changed tracked object, which is.
+    /// <para>
+    /// The doorbell is a courtesy: a commit in Smalltalk code, a failed ring or a context disposed
+    /// before the commit does not ring, and consumers find the objects at their next regular take.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">The feed uses another session.</exception>
+    public GciChangeFeed? ChangeFeed
+    {
+        get => _changeFeed;
+        set
+        {
+            if (value is not null && !ReferenceEquals(value.Session, _session))
+                throw new ArgumentException("The change feed must use the context's session.", nameof(value));
+            _changeFeed = value;
+        }
+    }
 
     /// <summary>
     /// Starts tracking a new object: <see cref="SaveChanges"/> creates it on the server. It only
@@ -151,6 +186,9 @@ public sealed partial class GsObjectContext : IDisposable
 
     private bool _listening;
 
+    /// <summary>SaveChanges published to the feed in this transaction: ring after the commit.</summary>
+    private bool _ringPending;
+
     private void JournalProperty(EntityEntry entry, GsPropertyMap p)
     {
         var entity = entry.Entity;
@@ -173,6 +211,17 @@ public sealed partial class GsObjectContext : IDisposable
     private void Journal(Action undo)
     {
         _undo.Add(undo);
+        ListenForTransactionEnd();
+    }
+
+    private void RingAfterCommit()
+    {
+        _ringPending = true;
+        ListenForTransactionEnd();
+    }
+
+    private void ListenForTransactionEnd()
+    {
         if (_listening) return;
         _session.TransactionEnded += OnTransactionEnded;
         _listening = true;
@@ -183,12 +232,23 @@ public sealed partial class GsObjectContext : IDisposable
         if (!committed)
             for (var i = _undo.Count - 1; i >= 0; i--)
                 _undo[i]();
+        var ring = committed && _ringPending ? _changeFeed : null;
         ForgetJournal();
+        if (ring is null) return;
+        try
+        {
+            ring.Ring();
+        }
+        catch (GciException)
+        {
+            // The commit succeeded; consumers take the objects at their next regular take.
+        }
     }
 
     private void ForgetJournal()
     {
         _undo.Clear();
+        _ringPending = false;
         if (!_listening) return;
         _session.TransactionEnded -= OnTransactionEnded;
         _listening = false;
@@ -316,7 +376,8 @@ public sealed partial class GsObjectContext : IDisposable
     /// ordered collections: remove <c>removed size</c> elements at <c>from</c> and insert there;
     /// <c>from</c> = 0, SortedCollections and unordered collections: <c>remove:</c> and <c>addAll:</c>.
     /// Arrays are changed through an OrderedCollection copy;</item>
-    /// <item><c>5 target removedKeys puts</c>: change a dictionary (<c>removeKey:</c>, <c>at:put:</c>).</item>
+    /// <item><c>5 target removedKeys puts</c>: change a dictionary (<c>removeKey:</c>, <c>at:put:</c>);</item>
+    /// <item><c>6 feed objects</c>: <c>feed publish: objects</c> (a GciChangeFeed; the last op).</item>
     /// </list>
     /// Value lists (items, removed …) are Arrays of values.
     /// A value is two slots, <c>kind payload</c>: 0 = the payload itself, 1 = the n-th created
@@ -370,7 +431,8 @@ public sealed partial class GsObjectContext : IDisposable
         "    ifTrue: [c size: new size. c replaceFrom: 1 to: new size with: new startingAt: 1]\n" +
         "    ifFalse: [c removeAll: c copy. c addAll: new]].\n" +
         "  i := i + 4] ifFalse: [\n" +
-        " self error: 'unknown op']]]]]].\n" +
+        " op == 6 ifTrue: [(self at: i + 1) publish: (decode value: (self at: i + 2)). i := i + 3] ifFalse: [\n" +
+        " self error: 'unknown op']]]]]]].\n" +
         "created asArray , converted asArray";
 
     /// <summary>
@@ -414,6 +476,7 @@ public sealed partial class GsObjectContext : IDisposable
     private sealed record ReplaceOp(BatchValue Target, List<BatchValue> Items) : BatchOp;
     private sealed record PatchOp(BatchValue Target, int From, List<BatchValue> Removed, List<BatchValue> Inserted) : BatchOp;
     private sealed record DictionaryPatchOp(BatchValue Target, List<BatchValue> RemovedKeys, List<BatchValue> Puts) : BatchOp;
+    private sealed record PublishOp(Oop Feed, List<BatchValue> Objects) : BatchOp;
 
     /// <summary>An object whose properties are compared and written: tracked, or new in this save.</summary>
     private sealed class SaveTarget(object entity, GsTypeMap map, BatchValue oop, EntityEntry? entry)
@@ -439,6 +502,9 @@ public sealed partial class GsObjectContext : IDisposable
         private readonly List<BatchValue> _created = [];
         private readonly Dictionary<object, SaveTarget> _inserted = new(ReferenceEqualityComparer.Instance);
         private readonly List<Action> _onSuccess = [];
+
+        /// <summary>Tracked objects this save writes to, for the change feed.</summary>
+        private readonly List<Oop> _changed = [];
 
         public int Stores { get; private set; }
 
@@ -483,6 +549,7 @@ public sealed partial class GsObjectContext : IDisposable
         private void Update(SaveTarget target, Func<EntityEntry>? newEntry = null)
         {
             var entry = target.Entry;
+            var opsBefore = _ops.Count;
             void Remember(GsPropertyMap p, Func<PropertySnapshot> snapshot) =>
                 _onSuccess.Add(() =>
                 {
@@ -511,6 +578,8 @@ public sealed partial class GsObjectContext : IDisposable
                 var lowerFirst = snap?.LowerFirst ?? true;
                 Remember(p, () => new PropertySnapshot { Oop = value.Resolved, Value = current, IsSymbol = isSymbol, LowerFirst = lowerFirst });
             }
+            // Ops of new objects planned meanwhile count too: they hang on a changed property of this one.
+            if (entry is not null && _ops.Count > opsBefore) _changed.Add(entry.Oop);
         }
 
         private void Store(SaveTarget target, GsPropertyMap p, BatchValue value)
@@ -843,6 +912,11 @@ public sealed partial class GsObjectContext : IDisposable
         /// <summary>Sends the batch (if there is anything to do) and applies the snapshots.</summary>
         public void Execute()
         {
+            if (_changed.Count > 0 && ctx._changeFeed is { } feed)
+            {
+                _ops.Add(new PublishOp(feed.Object, [.. _changed.Select(BatchValue.Of)]));
+                _onSuccess.Add(ctx.RingAfterCommit);
+            }
             if (_ops.Count > 0) Send();
             foreach (var action in _onSuccess) action();
         }
@@ -909,6 +983,11 @@ public sealed partial class GsObjectContext : IDisposable
                         Value(d.Target);
                         slots.Add(Values(d.RemovedKeys));
                         slots.Add(Values(d.Puts));
+                        break;
+                    case PublishOp pub:
+                        slots.Add(Oop.FromSmallInteger(6));
+                        slots.Add(pub.Feed);
+                        slots.Add(Values(pub.Objects));
                         break;
                 }
             }

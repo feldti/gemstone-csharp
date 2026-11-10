@@ -342,13 +342,29 @@ replica.Changed += (_, e) => RefreshWindows(e.Entities);   // after each update
 replica.Start();                                            // load, register, listen
 int count = replica.Read(c => c.Markets.Count);             // read under the read lock
 
-// a writer in C#
+// a writer in C# with the object mapping: SaveChanges publishes, the commit rings
+using var importer = new GsObjectContext(writer, GsGeneratedMappings.Default)
+{
+    ChangeFeed = new GciChangeFeed(writer, "ChangeFeed"),
+};
+var company = importer.Load<Company>("Companies current");
+company.Markets.Add(new Market { Name = "Nord" });
+importer.SaveChangesAndCommit();
+
+// a writer in C# without the mapping
 feed.Publish(changedOops);                                  // in the same transaction as the change
 writer.Commit();
 feed.Ring();                                                // after the commit: the doorbell
 ```
 
 A writer in Smalltalk does the same: `feed publish: changedObjects. System commitTransaction. feed ring`.
+
+- **With `GsObjectContext.ChangeFeed`, publishing follows the transaction.** `SaveChanges`
+  publishes the tracked objects it wrote to (for a changed collection, the object that holds it)
+  in the same batch, so in the same transaction, as the changes. An abort takes the publish back
+  with the changes; the next `SaveChanges` writes and publishes them again (`SaveChangesAndCommit`
+  does so on a conflict). A commit through the API rings once. A commit in Smalltalk code does
+  not ring; the replica then finds the objects at its next `PollInterval`.
 
 - **Nothing gets lost.** Every consumer key has its own `RcQueue` in the stone, which collects
   while the replica is not running. Signals are only the doorbell; the replica also looks every

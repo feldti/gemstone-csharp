@@ -112,6 +112,9 @@ public sealed class GciChangeFeed
     /// <summary>The session this object works with.</summary>
     public GciSession Session => _session;
 
+    /// <summary>The feed object in the stone (for <see cref="Mapping.GsObjectContext.ChangeFeed"/>'s batch).</summary>
+    internal Oop Object => _feed;
+
     /// <summary>
     /// Creates (or updates) the class <c>GciChangeFeed</c> and a feed named <paramref name="name"/>
     /// in <paramref name="dictionary"/>, if it does not exist yet. Commit afterwards.
