@@ -5,6 +5,8 @@
 //   dotnet run -c Release --project samples/ReplicaBench [rounds]        loads it (tracked and untracked)
 //   dotnet run -c Release --project samples/ReplicaBench -- refresh      an untracked replica follows another session's commits
 //   dotnet run -c Release --project samples/ReplicaBench -- feed [n]     replica of the whole graph + 2 parallel importers (n commits each) through a GciChangeFeed
+//   dotnet run -c Release --project samples/ReplicaBench -- notify [n]   replica follows a plain Smalltalk writer through the notify set (no publish at all)
+//   dotnet run -c Release --project samples/ReplicaBench -- written [n]  replica follows a Smalltalk writer that commits with commitPublishingWrittenObjects:
 //   dotnet run -c Release --project samples/ReplicaBench -- cleanup      removes data and classes
 //
 // Connection: GS_STONE, GS_GEM_SERVICE, GS_USER (DataCurator), GS_PASSWORD (swordfish).
@@ -74,6 +76,12 @@ switch (args.FirstOrDefault())
     }
     case "feed":
         FeedBench(args.Length > 1 && int.TryParse(args[1], out var n) ? n : 200);
+        break;
+    case "notify":
+        NotifyBench(args.Length > 1 && int.TryParse(args[1], out var nn) ? nn : 200);
+        break;
+    case "written":
+        WrittenBench(args.Length > 1 && int.TryParse(args[1], out var nw) ? nw : 200);
         break;
     default:
         var rounds = args.Length > 0 && int.TryParse(args[0], out var r) ? r : 2;
@@ -335,6 +343,233 @@ void FeedBench(int commitsPerImporter)
                       $"refresh customer {T(() => ctx.Refresh([cust.Oop], new GsLoadOptions { TrackChanges = false })):F2} ms");
     feed.Unregister("bench-replica");
     session.Execute($"(UserGlobals at: #{RootName}) customers do: [:c | c orders removeAll: (c orders select: [:o | o key = 'feed'])]. nil");
+    session.Commit();
+}
+
+// A replica of the whole graph follows a writer in plain Smalltalk (no publish, no doorbell) through
+// the notify set: the listener session watches every mapped object and collection. Each commit
+// changes three positions (quantity = a unique marker); every fifth also adds a position to an
+// order's positions (a plain OrderedCollection).
+void NotifyBench(int commits)
+{
+    using var writer = GciSession.Login(net, Env("GS_USER", "DataCurator"), Env("GS_PASSWORD", "swordfish"));
+    using var listenerSession = GciSession.Login(net, Env("GS_USER", "DataCurator"), Env("GS_PASSWORD", "swordfish"));
+    var rnd = new Random(1);
+    var sent = new System.Collections.Concurrent.ConcurrentDictionary<long, long>();    // marker -> commit timestamp
+    var latencies = new System.Collections.Concurrent.ConcurrentBag<double>();
+
+    // One commit of the writer: plain Smalltalk, nothing published.
+    double WriterCommit(int i, bool record)
+    {
+        var marker = 1_000_000L + i * 10;
+        var customer = rnd.Next(1, Customers + 1);
+        writer.Execute($$"""
+            | c |
+            c := (UserGlobals at: #{{RootName}}) customers at: {{customer}}.
+            (c orders asArray first: 3) doWithIndex: [:o :k | | p |
+                p := o positions first. p quantity: {{marker}} + k; rev: p rev + 1].
+            {{(i % 5 == 4 ? "true" : "false")}} ifTrue: [ | o |
+                o := c orders asArray first.
+                o positions add: (BenchPosition new rev: 1; key: 'notify'; order: o; quantity: {{marker}} + 9; price: 0.0; yourself)].
+            nil
+            """);
+        var t0 = Stopwatch.GetTimestamp();
+        if (record)
+        {
+            for (var k = 1; k <= 3; k++) sent[marker + k] = t0;
+            if (i % 5 == 4) sent[marker + 9] = t0;
+        }
+        writer.Commit();
+        return Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+    }
+    static double Median(IEnumerable<double> xs) { var a = xs.Order().ToArray(); return a.Length == 0 ? double.NaN : a[a.Length / 2]; }
+    static double Pct(double[] a, double q) => a.Length == 0 ? double.NaN : a[Math.Min(a.Length - 1, (int)(q * a.Length))];
+    long GemRssMb(GciSession s)
+    {
+        var pid = s.Evaluate<long>("System gemProcessId");
+        var line = File.ReadLines($"/proc/{pid}/status").FirstOrDefault(l => l.StartsWith("VmRSS:", StringComparison.Ordinal));
+        return line is null ? -1 : long.Parse(line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1]) / 1024;
+    }
+
+    // Baseline: the writer's commit while nobody watches anything.
+    var baseline = Enumerable.Range(0, 50).Select(i => WriterCommit(100_000 + i, record: false)).ToList();
+    Console.WriteLine($"writer commit, no notify set: median {Median(baseline):F1} ms");
+
+    var sw = Stopwatch.StartNew();
+    using var ctx = new GsObjectContext(session, GsGeneratedMappings.Default);
+    session.Abort();
+    var untracked = new GsLoadOptions { TrackChanges = false };
+    ctx.Load<BenchRoot>(RootName, untracked);
+    Console.WriteLine($"replica loaded in {sw.Elapsed.TotalSeconds:F2} s");
+
+    // Watch every mapped object and every mapped collection (computed in the listener's gem).
+    using var listener = new GciSignalListener(listenerSession);
+    var rssBefore = GemRssMb(listenerSession);
+    var pollIdleBefore = Median(Enumerable.Range(0, 20).Select(_ => { var w = Stopwatch.StartNew(); listener.Poll(); return w.Elapsed.TotalMilliseconds; }));
+    sw.Restart();
+    var watched = listenerSession.Evaluate<long>($$"""
+        | root all |
+        root := UserGlobals at: #{{RootName}}.
+        all := OrderedCollection new: 900000.
+        all add: root; add: root customers; add: root articles; addAll: root articles.
+        root customers do: [:c |
+            all add: c; add: c orders; add: c related.
+            c orders do: [:o | all add: o; add: o positions; addAll: o positions]].
+        System addAllToNotifySet: all asArray.
+        System notifySet size
+        """);
+    var watchTime = sw.Elapsed;
+    var rssAfter = GemRssMb(listenerSession);
+    var pollIdleAfter = Median(Enumerable.Range(0, 20).Select(_ => { var w = Stopwatch.StartNew(); listener.Poll(); return w.Elapsed.TotalMilliseconds; }));
+    Console.WriteLine($"notify set: {watched:N0} objects in {watchTime.TotalSeconds:F2} s; listener gem RSS {rssBefore} -> {rssAfter} MB; " +
+                      $"idle poll {pollIdleBefore:F2} -> {pollIdleAfter:F2} ms");
+
+    var refreshed = 0L;
+    var batches = new System.Collections.Concurrent.ConcurrentBag<int>();
+    listener.SignalsReceived += (_, e) =>
+    {
+        if (e.Signals.ChangedObjects.Count == 0) return;
+        batches.Add(e.Signals.ChangedObjects.Count);
+        session.Abort();
+        var entities = ctx.Refresh(e.Signals.ChangedObjects, untracked);
+        var now = Stopwatch.GetTimestamp();
+        Interlocked.Add(ref refreshed, entities.Count);
+        foreach (var p in entities.OfType<BenchPosition>())
+            if (sent.TryRemove(p.Quantity, out var t0)) latencies.Add(Stopwatch.GetElapsedTime(t0, now).TotalMilliseconds);
+        foreach (var o in entities.OfType<BenchOrder>())
+            foreach (var p in o.Positions)
+                if (sent.TryRemove(p.Quantity, out var t0)) latencies.Add(Stopwatch.GetElapsedTime(t0, now).TotalMilliseconds);
+    };
+    listener.PollFailed += (_, e) => Console.WriteLine($"listener: {e.Error.Message}");
+    listener.Start();
+
+    var withNotify = new List<double>();
+    sw.Restart();
+    for (var i = 0; i < commits; i++)
+    {
+        withNotify.Add(WriterCommit(i, record: true));
+        Thread.Sleep(rnd.Next(2, 20));
+    }
+    var writeTime = sw.Elapsed;
+    var until = DateTime.UtcNow.AddSeconds(10);
+    while (!sent.IsEmpty && DateTime.UtcNow < until) Thread.Sleep(50);
+    listener.Stop();
+
+    var l = latencies.Order().ToArray();
+    Console.WriteLine($"{commits} commits in {writeTime.TotalSeconds:F1} s; writer commit with notify set: median {Median(withNotify):F1} ms");
+    Console.WriteLine($"{batches.Count} notifications ({(batches.IsEmpty ? 0 : batches.Average()):F1} objects each), {refreshed} entities refreshed, " +
+                      $"{l.Length} changes seen, {sent.Count} missing");
+    Console.WriteLine($"latency commit -> refreshed: median {Pct(l, 0.5):F1} ms, p95 {Pct(l, 0.95):F1} ms, max {(l.Length > 0 ? l[^1] : double.NaN):F1} ms");
+
+    writer.Execute($"(UserGlobals at: #{RootName}) customers do: [:c | c orders do: [:o | o positions removeAll: (o positions select: [:p | p key = 'notify'])]]. nil");
+    writer.Commit();
+}
+
+// A replica of the whole graph follows a writer in plain Smalltalk that lists nothing: it commits
+// with `feed commitPublishingWrittenObjects: filter`, which publishes the transaction's dirty list.
+// Same changes as NotifyBench, then one large commit (20,000 positions).
+void WrittenBench(int commits)
+{
+    // A fresh feed: one left from an earlier run may be an instance of an older GciChangeFeed class.
+    session.Execute($"UserGlobals removeKey: #{FeedName} ifAbsent: []. nil");
+    GciChangeFeed.Install(session, FeedName);
+    session.Commit();
+    var feed = new GciChangeFeed(session, FeedName);
+    using var writer = GciSession.Login(net, Env("GS_USER", "DataCurator"), Env("GS_PASSWORD", "swordfish"));
+    using var listenerSession = GciSession.Login(net, Env("GS_USER", "DataCurator"), Env("GS_PASSWORD", "swordfish"));
+    using var listener = new GciSignalListener(listenerSession);
+    using var ctx = new GsObjectContext(session, GsGeneratedMappings.Default);
+    using var replica = new GsReplica<BenchRoot>(ctx, feed, "bench-written", listener, RootName);
+    const string Filter = "[:o | (o class name beginsWith: 'Bench') or: [o class == OrderedCollection]]";
+    var rnd = new Random(1);
+    var sent = new System.Collections.Concurrent.ConcurrentDictionary<long, long>();
+    var latencies = new System.Collections.Concurrent.ConcurrentBag<double>();
+    var published = new System.Collections.Concurrent.ConcurrentBag<int>();
+    replica.Changed += (_, e) =>
+    {
+        var now = Stopwatch.GetTimestamp();
+        published.Add(e.Published.Count);
+        foreach (var p in e.Entities.OfType<BenchPosition>())
+            if (sent.TryRemove(p.Quantity, out var t0)) latencies.Add(Stopwatch.GetElapsedTime(t0, now).TotalMilliseconds);
+        foreach (var o in e.Entities.OfType<BenchOrder>())
+            foreach (var p in o.Positions)
+                if (sent.TryRemove(p.Quantity, out var t0)) latencies.Add(Stopwatch.GetElapsedTime(t0, now).TotalMilliseconds);
+    };
+    replica.UpdateFailed += (_, e) => Console.WriteLine($"update failed: {e.Error.Message}");
+    static double Median(IEnumerable<double> xs) { var a = xs.Order().ToArray(); return a.Length == 0 ? double.NaN : a[a.Length / 2]; }
+    static double Pct(double[] a, double q) => a.Length == 0 ? double.NaN : a[Math.Min(a.Length - 1, (int)(q * a.Length))];
+    void WaitForAll() { var until = DateTime.UtcNow.AddSeconds(20); while (!sent.IsEmpty && DateTime.UtcNow < until) Thread.Sleep(20); }
+
+    var sw = Stopwatch.StartNew();
+    replica.Start();
+    Console.WriteLine($"replica loaded in {sw.Elapsed.TotalSeconds:F2} s");
+    // The replica registered its consumer in a commit; a writer whose transaction began before
+    // that would publish to the consumers it sees, i.e. not to this one.
+    if (Environment.GetEnvironmentVariable("BENCH_STALE_WRITER") is null) writer.Abort();
+
+    // Small commits, as in NotifyBench; the writer only says how to commit.
+    var commitMs = new List<double>();
+    sw.Restart();
+    for (var i = 0; i < commits; i++)
+    {
+        var marker = 2_000_000L + i * 10;
+        writer.Execute($$"""
+            | c |
+            c := (UserGlobals at: #{{RootName}}) customers at: {{rnd.Next(1, Customers + 1)}}.
+            (c orders asArray first: 3) doWithIndex: [:o :k | | p |
+                p := o positions first. p quantity: {{marker}} + k; rev: p rev + 1].
+            {{(i % 5 == 4 ? "true" : "false")}} ifTrue: [ | o |
+                o := c orders asArray first.
+                o positions add: (BenchPosition new rev: 1; key: 'written'; order: o; quantity: {{marker}} + 9; price: 0.0; yourself)].
+            nil
+            """);
+        var t0 = Stopwatch.GetTimestamp();
+        for (var k = 1; k <= 3; k++) sent[marker + k] = t0;
+        if (i % 5 == 4) sent[marker + 9] = t0;
+        if (!writer.Evaluate<bool>($"(UserGlobals at: #{FeedName}) commitPublishingWrittenObjects: {Filter}"))
+            throw new InvalidOperationException("conflict");
+        commitMs.Add(Stopwatch.GetElapsedTime(t0).TotalMilliseconds);
+        Thread.Sleep(rnd.Next(2, 20));
+    }
+    WaitForAll();
+    if (!sent.IsEmpty) Console.WriteLine($"missing markers: {string.Join(", ", sent.Keys.Order())}");
+    sent.Clear();
+    var l = latencies.Order().ToArray();
+    Console.WriteLine($"{commits} commits in {sw.Elapsed.TotalSeconds:F1} s; writer publish+commit+ring: median {Median(commitMs):F1} ms; " +
+                      $"{published.Sum()} objects published in {published.Count} updates; {l.Length} changes seen, {sent.Count} missing");
+    Console.WriteLine($"latency commit -> Changed: median {Pct(l, 0.5):F1} ms, p95 {Pct(l, 0.95):F1} ms, max {(l.Length > 0 ? l[^1] : double.NaN):F1} ms");
+
+    // One large commit: the first position of every order of 2,000 customers (20,000 positions),
+    // plain commit for comparison, then with publishing.
+    foreach (var publish in new[] { false, true })
+    {
+        var marker = publish ? 3_000_000L : 4_000_000L;
+        writer.Execute($$"""
+            | n |
+            n := 0.
+            ((UserGlobals at: #{{RootName}}) customers copyFrom: 1 to: 2000) do: [:c |
+                c orders do: [:o | n := n + 1. o positions first quantity: {{marker}} + n]].
+            nil
+            """);
+        latencies.Clear();
+        if (publish) for (var k = 1; k <= 20_000; k++) sent[marker + k] = Stopwatch.GetTimestamp();
+        var t0 = Stopwatch.GetTimestamp();
+        if (publish) writer.Evaluate<bool>($"(UserGlobals at: #{FeedName}) commitPublishingWrittenObjects: {Filter}");
+        else writer.Commit();
+        var commitTime = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+        if (publish)
+        {
+            WaitForAll();
+            var all = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+            Console.WriteLine($"large commit (20,000 positions) with publishing: {commitTime:F0} ms; " +
+                              (sent.IsEmpty ? $"replica complete after {all:F0} ms" : $"{sent.Count} missing after 20 s"));
+        }
+        else Console.WriteLine($"large commit (20,000 positions) plain: {commitTime:F0} ms");
+    }
+
+    replica.Dispose();
+    feed.Unregister("bench-written");
+    session.Execute($"(UserGlobals at: #{RootName}) customers do: [:c | c orders do: [:o | o positions removeAll: (o positions select: [:p | p key = 'written'])]]. nil");
     session.Commit();
 }
 

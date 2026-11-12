@@ -171,6 +171,74 @@ public sealed class GciChangeFeedIntegrationTests : IDisposable
     }
 
     [StoneFact]
+    public async Task TheReplicaFollowsAWriterThatListsNothing()
+    {
+        using var ctx = new GsObjectContext(W);
+        using var listener = new GciSignalListener(_listen!);
+        using var replica = new GsReplica<FeedItem>(ctx, Feed(W), "replica", listener, Item) { PollInterval = TimeSpan.FromMinutes(5) };
+        var changed = new TaskCompletionSource<GsReplicaChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        replica.Changed += (_, e) => changed.TrySetResult(e);
+        await Task.Run(replica.Start);
+        Assert.Equal("Dora", replica.Read(r => r.Name));
+
+        // Plain Smalltalk; the commit method publishes the dirty list (what a code generator would emit).
+        _writer!.Abort();
+        Assert.True(_writer.Evaluate<bool>($$"""
+            {{Item}} instVarNamed: 'name' put: 'Emil'.
+            (UserGlobals at: #{{_feedName}}) commitPublishingWrittenObjects: [:o | o isKindOf: GsFeedTestItem]
+            """));
+
+        var e = await Within(changed.Task);                // the doorbell, not the timer (5 minutes)
+        Assert.Contains(e.Entities, o => o is FeedItem { Name: "Emil" });
+        Assert.Equal("Emil", replica.Read(r => r.Name));
+    }
+
+    [StoneFact]
+    public void PublishWrittenObjectsPublishesWhatTheTransactionWrote()
+    {
+        var feed = Feed(W);
+        feed.Register("one", W.GemSessionId);
+        W.Commit();
+
+        _writer!.Abort();
+        var item = _writer.Execute(Item);
+        // Writes the item, a new (temporary) child and UserGlobals; the filter keeps the item only.
+        // The new child is not in the dirty list: it is not persistent yet.
+        Assert.Equal(1, _writer.Evaluate<long>($$"""
+            {{Item}} instVarNamed: 'name' put: 'Fritz'.
+            UserGlobals at: #{{_key}}_tmp put: (GsFeedTestItem new instVarNamed: 'name' put: 'new'; yourself).
+            (UserGlobals at: #{{_feedName}}) publishWrittenObjects: [:o | o isKindOf: GsFeedTestItem]
+            """));
+        _writer.Commit();
+
+        W.Abort();
+        Assert.Equal([item], feed.Take("one"));
+        W.Commit();
+        _writer.Execute($"UserGlobals removeKey: #{_key}_tmp. true");
+        _writer.Commit();
+        _writer.Release(item);
+    }
+
+    [StoneFact]
+    public void ACommitConflictTakesThePublishBack()
+    {
+        var feed = Feed(W);
+        feed.Register("one", W.GemSessionId);
+        W.Commit();
+
+        // The writer and another session change the same object; the other one commits first.
+        _writer!.Abort();
+        _writer.Execute($"{Item} instVarNamed: 'name' put: 'Writer'. true");
+        W.Execute($"{Item} instVarNamed: 'name' put: 'Other'. true");
+        W.Commit();
+        Assert.False(_writer.Evaluate<bool>($"(UserGlobals at: #{_feedName}) commitPublishingWrittenObjects: nil"));
+        _writer.Abort();
+
+        W.Abort();
+        Assert.Equal(0, feed.Pending("one"));
+    }
+
+    [StoneFact]
     public async Task WithoutTheDoorbellTheTimerCatchesUp()
     {
         using var ctx = new GsObjectContext(W);

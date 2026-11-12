@@ -17,7 +17,11 @@ namespace GemStone.Gci;
 /// </para>
 /// <para>
 /// Smalltalk writers use the same object:
-/// <c>feed publish: changedObjects. System commitTransaction. feed ring</c>.
+/// <c>feed publish: changedObjects. System commitTransaction. feed ring</c>. Without listing the
+/// changed objects: <c>feed commitPublishingWrittenObjects: [:o | o isModelObject]</c> publishes
+/// what the transaction has written (the dirty list, <c>System _writtenObjects</c>), commits and
+/// rings. Adding to an RC collection is not seen that way: the dirty list holds only its internal
+/// parts.
 /// </para>
 /// <para>
 /// A consumer that is no longer needed must be <see cref="Unregister">unregistered</see>,
@@ -47,6 +51,28 @@ public sealed class GciChangeFeed
             objects isEmpty ifTrue: [^self].
             entry := objects asArray.
             consumers do: [:e | (e at: 1) add: entry]
+        """,
+        """
+        publishWrittenObjects: aBlock
+            "Publish the persistent objects this transaction has written so far (System _writtenObjects,
+             the dirty list), those for which aBlock answers true; nil publishes all of them.
+             Call it right before the commit. Objects created in this transaction are not in the
+             dirty list; they reach consumers through the written object that references them.
+             Adding to an RC collection writes only its internal parts, not the collection itself."
+            | written |
+            written := System _writtenObjects.
+            aBlock notNil ifTrue: [written := written select: aBlock].
+            self publish: written.
+            ^written size
+        """,
+        """
+        commitPublishingWrittenObjects: aBlock
+            "publishWrittenObjects:, commit and ring. Answers false on a commit conflict (abort and
+             retry; the abort also takes back the publish)."
+            self publishWrittenObjects: aBlock.
+            System commitTransaction ifFalse: [^false].
+            self ring.
+            ^true
         """,
         """
         ring

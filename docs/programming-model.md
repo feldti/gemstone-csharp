@@ -358,6 +358,22 @@ feed.Ring();                                                // after the commit:
 ```
 
 A writer in Smalltalk does the same: `feed publish: changedObjects. System commitTransaction. feed ring`.
+It does not have to list the changed objects: `feed commitPublishingWrittenObjects: [:o | …]`
+publishes what the transaction has written (the dirty list, `System _writtenObjects`, filtered by
+the block), commits and rings, and answers false on a conflict. The block typically keeps
+instances of the model classes and their plain collections; a code generator can emit it in a
+model-wide commit method, so that Smalltalk code just changes objects and calls that method.
+Objects created in the transaction are not in the dirty list; they arrive through the written
+object that references them. Adding to an RC collection writes only its internal parts, so the
+RC collection itself is not published.
+
+- **A new consumer only gets what is published in transactions that began after its
+  registration was committed.** A writer's `publish:` goes to the consumers its transaction
+  sees. A writer that has been idle since before the registration (its transaction is old)
+  publishes its next commit without the new consumer, and if that commit comes after the
+  replica's load, the replica misses it until it reloads. Use consumer keys that stay the same
+  across restarts: then the queue exists already and keeps collecting while the replica is
+  down, and only the very first start of a key has this gap.
 
 - **With `GsObjectContext.ChangeFeed`, publishing follows the transaction.** `SaveChanges`
   publishes the tracked objects it wrote to (for a changed collection, the object that holds it)
