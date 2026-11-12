@@ -65,6 +65,9 @@ dotnet run -c Release --project samples/ReplicaBench              # lädt mit un
 dotnet run -c Release --project samples/ReplicaBench -- refresh   # ungetracktes Replikat folgt den Commits einer zweiten Session
 dotnet run -c Release --project samples/ReplicaBench -- feed 200  # GsReplica über GciChangeFeed, 2 parallele Importer (BENCH_IMPORTERS, BENCH_DELAY_MS)
 dotnet run -c Release --project samples/ReplicaBench -- cleanup
+
+# Einstiegsbeispiel: Login, Root per ResolveSymbol, Load, Struktur im RAM in die Collection der Root, SaveChangesAndCommit
+dotnet run --project samples/RootExample -- setup     # danach ohne Argument, zum Schluss cleanup
 ```
 
 ## Architektur

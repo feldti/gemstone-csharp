@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="../../src/GemStone.Gci/GemStone.Gci.csproj" />
+  <Project Path="RootExample.csproj" />
+</Solution>

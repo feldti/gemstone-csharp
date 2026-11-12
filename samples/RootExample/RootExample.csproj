@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Example: find a root, build a structure in RAM, hang it into the root, commit. Usage in Program.cs. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\GemStone.Gci\GemStone.Gci.csproj" />
+    <ProjectReference Include="..\..\src\GemStone.Gci.Generators\GemStone.Gci.Generators.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
