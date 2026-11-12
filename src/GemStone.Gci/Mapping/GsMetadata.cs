@@ -109,8 +109,9 @@ public sealed class GsPropertyMetadata
 {
     internal GsPropertyMetadata(string owner, string name, Type propertyType, string instVar,
         Func<object, object?> get, Action<object, object?> set, GsCollectionKind? collectionKind, bool readOnly,
-        IGsValueConverter? converter)
+        IGsValueConverter? converter, string? keySelector = null)
     {
+        KeySelector = keySelector;
         Owner = owner;
         Name = name;
         PropertyType = propertyType;
@@ -131,6 +132,7 @@ public sealed class GsPropertyMetadata
     internal GsCollectionKind? CollectionKind { get; }
     internal bool ReadOnly { get; }
     internal IGsValueConverter? Converter { get; }
+    internal string? KeySelector { get; }
 
     /// <summary>A property of <typeparamref name="TOwner"/> (the declaring class) mapped to <paramref name="instVar"/>.</summary>
     /// <param name="name">The property name (for error messages).</param>
@@ -140,11 +142,12 @@ public sealed class GsPropertyMetadata
     /// <param name="collectionKind">From <see cref="GsCollectionAttribute"/>.</param>
     /// <param name="readOnly">From <see cref="GsReadOnlyAttribute"/>.</param>
     /// <param name="converter">From <see cref="GsConverterAttribute"/>.</param>
+    /// <param name="keySelector">From <see cref="GsDictionaryKeyAttribute"/>.</param>
     public static GsPropertyMetadata Create<TOwner, TValue>(string name, string instVar, Func<TOwner, TValue> get,
         Action<TOwner, TValue> set, GsCollectionKind? collectionKind = null, bool readOnly = false,
-        IGsValueConverter? converter = null) where TOwner : class =>
+        IGsValueConverter? converter = null, string? keySelector = null) where TOwner : class =>
         new(typeof(TOwner).Name, name, typeof(TValue), instVar, o => get((TOwner)o), (o, v) => set((TOwner)o, (TValue)v!),
-            collectionKind, readOnly, converter);
+            collectionKind, readOnly, converter, keySelector);
 }
 
 /// <summary>How a C# type is filled from a GemStone value (cached per type).</summary>
@@ -205,6 +208,7 @@ internal sealed class GsPropertyMap
     public Type PropertyType => Metadata.PropertyType;
     public IGsValueConverter? Converter => Metadata.Converter;
     public GsCollectionKind? CollectionKind => Metadata.CollectionKind;
+    public string? KeySelector => Metadata.KeySelector;
     public bool ReadOnly => Metadata.ReadOnly;
     public object? Get(object entity) => Metadata.Get(entity);
     public void Set(object entity, object? value) => Metadata.Set(entity, value);
@@ -312,6 +316,13 @@ internal sealed class GsShapeFactory(IGsMappingProvider provider)
                 errors.Add($"{where}: [GsCollection(Dictionary)] needs a dictionary property type.");
             if (kind is not null and not GsCollectionKind.Dictionary && propShape.Kind == GsShapeKind.Dictionary)
                 errors.Add($"{where}: a dictionary property type needs [GsCollection(Dictionary)] or none.");
+            if (p.KeySelector is { } sel)
+            {
+                if (!propShape.IsCollection || propShape.Kind == GsShapeKind.Dictionary || kind is not (null or GsCollectionKind.Dictionary))
+                    errors.Add($"{where}: [GsDictionaryKey] belongs on a list or array property (the values of a dictionary).");
+                if (sel.Length == 0 || !(char.IsLetter(sel[0]) || sel[0] == '_') || !sel.All(c => char.IsLetterOrDigit(c) || c == '_'))
+                    errors.Add($"{where}: [GsDictionaryKey(\"{sel}\")] is not a unary selector.");
+            }
             map.Properties.Add(new GsPropertyMap { Metadata = p, Shape = propShape });
         }
 

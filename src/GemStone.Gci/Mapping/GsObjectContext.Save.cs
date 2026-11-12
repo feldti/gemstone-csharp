@@ -17,6 +17,9 @@ internal sealed class CollectionSnapshot(Oop oop, List<SnapElement> elements)
 {
     public Oop Oop { get; } = oop;
     public List<SnapElement> Elements { get; set; } = elements;
+
+    /// <summary>A list whose GemStone collection is a dictionary (the elements are its values).</summary>
+    public bool KeyedValues { get; init; }
 }
 
 /// <summary>Snapshot of one mapped property as loaded or last saved.</summary>
@@ -375,9 +378,16 @@ public sealed partial class GsObjectContext : IDisposable
     /// <item><c>4 target from removed inserted</c>: change a collection. <c>from</c> &gt; 0 for
     /// ordered collections: remove <c>removed size</c> elements at <c>from</c> and insert there;
     /// <c>from</c> = 0, SortedCollections and unordered collections: <c>remove:</c> and <c>addAll:</c>.
-    /// Arrays are changed through an OrderedCollection copy;</item>
+    /// Arrays are changed through an OrderedCollection copy; an RcQueue is only appended to;</item>
     /// <item><c>5 target removedKeys puts</c>: change a dictionary (<c>removeKey:</c>, <c>at:put:</c>);</item>
-    /// <item><c>6 feed objects</c>: <c>feed publish: objects</c> (a GciChangeFeed; the last op).</item>
+    /// <item><c>6 feed objects</c>: <c>feed publish: objects</c> (a GciChangeFeed; the last op);</item>
+    /// <item><c>7 target selector removed inserted</c>: change a dictionary held as a list
+    /// (<see cref="GsDictionaryKeyAttribute"/>): removed values lose their key, inserted ones are
+    /// put under <c>value perform: selector</c>;</item>
+    /// <item><c>9 target index class selector items where</c>: a collection-valued instVar of a
+    /// new object (or one that was nil): takes the collection already there (from the class's
+    /// <c>initialize</c>) or stores <c>class new</c>, fills it (a dictionary with
+    /// <c>selector</c>) and counts as a created object.</item>
     /// </list>
     /// Value lists (items, removed …) are Arrays of values.
     /// A value is two slots, <c>kind payload</c>: 0 = the payload itself, 1 = the n-th created
@@ -400,13 +410,15 @@ public sealed partial class GsObjectContext : IDisposable
         " converted add: r. r]]].\n" +
         "decode := [:src | | a | a := Array new: src size // 2.\n" +
         " 1 to: a size do: [:j | a at: j put: (val value: (src at: j * 2 - 1) value: (src at: j * 2))]. a].\n" +
-        "patch := [:coll :from :rem :ins | (coll isKindOf: Array)\n" +
+        "patch := [:coll :from :rem :ins | (coll isKindOf: RcQueue)\n" +
+        " ifTrue: [rem isEmpty ifFalse: [self error: 'an RcQueue can only be appended to from C#; take elements out in Smalltalk'].\n" +
+        "  ins do: [:x | coll add: x]] ifFalse: [(coll isKindOf: Array)\n" +
         " ifTrue: [ | r | r := OrderedCollection withAll: coll. patch value: r value: from value: rem value: ins.\n" +
         "  coll size: r size. coll replaceFrom: 1 to: r size with: r asArray startingAt: 1]\n" +
         " ifFalse: [((from > 0) and: [(coll isKindOf: OrderedCollection) and: [(coll isKindOf: SortedCollection) not]])\n" +
         "  ifTrue: [rem size timesRepeat: [coll removeIndex: from].\n" +
         "   from > coll size ifTrue: [coll addAll: ins] ifFalse: [ins reverseDo: [:x | coll add: x beforeIndex: from]]]\n" +
-        "  ifFalse: [rem do: [:x | coll remove: x ifAbsent: [nil]]. coll addAll: ins]]].\n" +
+        "  ifFalse: [rem do: [:x | coll remove: x ifAbsent: [nil]]. coll addAll: ins]]]].\n" +
         "i := 1. n := self size.\n" +
         "[i <= n] whileTrue: [\n" +
         " op := self at: i.\n" +
@@ -432,7 +444,29 @@ public sealed partial class GsObjectContext : IDisposable
         "    ifFalse: [c removeAll: c copy. c addAll: new]].\n" +
         "  i := i + 4] ifFalse: [\n" +
         " op == 6 ifTrue: [(self at: i + 1) publish: (decode value: (self at: i + 2)). i := i + 3] ifFalse: [\n" +
-        " self error: 'unknown op']]]]]]].\n" +
+        " op == 7 ifTrue: [ | sel rem ins |\n" +
+        "  c := val value: (self at: i + 1) value: (self at: i + 2). sel := (self at: i + 3) asSymbol.\n" +
+        "  rem := decode value: (self at: i + 4). ins := decode value: (self at: i + 5).\n" +
+        "  (c isKindOf: AbstractDictionary)\n" +
+        "   ifTrue: [rem do: [:x | | key | key := nil. c keysAndValuesDo: [:k :v | v == x ifTrue: [key := k]].\n" +
+        "     key notNil ifTrue: [c removeKey: key]].\n" +
+        "    ins do: [:x | c at: (x perform: sel) put: x]]\n" +
+        "   ifFalse: [patch value: c value: 0 value: rem value: ins].\n" +
+        "  i := i + 6] ifFalse: [\n" +
+        " op == 9 ifTrue: [ | t idx sel items |\n" +
+        "  t := val value: (self at: i + 1) value: (self at: i + 2). idx := self at: i + 3.\n" +
+        "  c := t instVarAt: idx.\n" +
+        "  (c isKindOf: Collection) ifFalse: [c := (self at: i + 4) new. t instVarAt: idx put: c].\n" +
+        "  created add: c.\n" +
+        "  sel := self at: i + 5. items := decode value: (self at: i + 6).\n" +
+        "  (c isKindOf: AbstractDictionary)\n" +
+        "   ifTrue: [sel isNil ifTrue: [self error: (self at: i + 7), ': the new object''s collection is a dictionary; add [GsDictionaryKey] in C#'].\n" +
+        "    sel := sel asSymbol. items do: [:x | c at: (x perform: sel) put: x]]\n" +
+        "   ifFalse: [(c isKindOf: Array)\n" +
+        "    ifTrue: [c size: items size. c replaceFrom: 1 to: items size with: items startingAt: 1]\n" +
+        "    ifFalse: [items do: [:x | c add: x]]].\n" +
+        "  i := i + 8] ifFalse: [\n" +
+        " self error: 'unknown op']]]]]]]]].\n" +
         "created asArray , converted asArray";
 
     /// <summary>
@@ -477,6 +511,8 @@ public sealed partial class GsObjectContext : IDisposable
     private sealed record PatchOp(BatchValue Target, int From, List<BatchValue> Removed, List<BatchValue> Inserted) : BatchOp;
     private sealed record DictionaryPatchOp(BatchValue Target, List<BatchValue> RemovedKeys, List<BatchValue> Puts) : BatchOp;
     private sealed record PublishOp(Oop Feed, List<BatchValue> Objects) : BatchOp;
+    private sealed record KeyedPatchOp(BatchValue Target, string Selector, List<BatchValue> Removed, List<BatchValue> Inserted) : BatchOp;
+    private sealed record FillNewOp(BatchValue Target, int Index, Oop Class, string? Selector, List<BatchValue> Items, string Where) : BatchOp;
 
     /// <summary>An object whose properties are compared and written: tracked, or new in this save.</summary>
     private sealed class SaveTarget(object entity, GsTypeMap map, BatchValue oop, EntityEntry? entry)
@@ -601,8 +637,30 @@ public sealed partial class GsObjectContext : IDisposable
 
             if (old is not null)
             {
-                PatchContents(old, current, p.Shape, p.Path);
+                PatchContents(old, current, p.Shape, p.Path, p.KeySelector);
                 remember(p, () => new PropertySnapshot { Oop = old.Oop, Value = current, Collection = old });
+                return;
+            }
+
+            if (p.Shape.Kind != GsShapeKind.Dictionary)
+            {
+                // Was nil (or a new object): fill the collection the server's initialize created
+                // (its class follows the Smalltalk model: RcIdentityBag, a dictionary …), or create one.
+                var items = Items(current);
+                var planned = items.Select(item => Element(item, p.Shape.Element!, [], p.Path)).ToList();
+                var cls = p.KeySelector is null ? CollectionClassName(p.CollectionKind, p.Shape) : "KeyValueDictionary";
+                var filled = new BatchValue { Kind = 1, Created = _created.Count + 1 };
+                _ops.Add(new FillNewOp(target.Oop, p.Index, ctx.Kernel(cls), p.KeySelector, [.. planned.Select(e => e.Value)], p.Path));
+                _created.Add(filled);
+                Stores++;
+                remember(p, () => new PropertySnapshot
+                {
+                    Oop = filled.Resolved, Value = current,
+                    Collection = new CollectionSnapshot(filled.Resolved, [.. planned.Select((e, i) => e.Snap(items[i]))])
+                    {
+                        KeyedValues = p.KeySelector is not null,
+                    },
+                });
                 return;
             }
 
@@ -620,7 +678,7 @@ public sealed partial class GsObjectContext : IDisposable
         /// Changes a loaded collection in place if its contents differ from the snapshot, then does
         /// the same for the collections inside it (they are compared by reference one level up).
         /// </summary>
-        private void PatchContents(CollectionSnapshot old, object current, GsShape shape, string where)
+        private void PatchContents(CollectionSnapshot old, object current, GsShape shape, string where, string? keySelector = null)
         {
             if (!_patched.Add(old)) return; // the same collection reachable twice
             var items = Items(current);
@@ -630,6 +688,7 @@ public sealed partial class GsObjectContext : IDisposable
                 var collOop = BatchValue.Of(old.Oop);
                 var elements = shape.Kind switch
                 {
+                    _ when old.KeyedValues => PatchKeyed(collOop, shape, items, before, where, keySelector),
                     GsShapeKind.Dictionary => PatchDictionary(collOop, shape, items, before, where),
                     GsShapeKind.Set => PatchUnordered(collOop, shape, items, before, where),
                     _ => PatchOrdered(collOop, shape, items, before, where),
@@ -732,6 +791,35 @@ public sealed partial class GsObjectContext : IDisposable
                 snapshot.Add(() => planned.Snap(item));
             }
             _ops.Add(new PatchOp(coll, 0, [.. unmatched.Select(e => BatchValue.Of(e.Oop))], inserted));
+            return () => [.. snapshot.Select(f => f())];
+        }
+
+        /// <summary>
+        /// A list whose GemStone collection is a dictionary: removed values lose their key, new ones
+        /// are put under <c>value perform: keySelector</c> (on the server).
+        /// </summary>
+        private Func<List<SnapElement>> PatchKeyed(BatchValue coll, GsShape shape, List<object?> items, List<SnapElement> old, string where, string? keySelector)
+        {
+            if (keySelector is null)
+                throw GsMappingException.For($"{where}: on the server this is a dictionary; add [GsDictionaryKey(\"selector\")] to change it from C#.");
+            var unmatched = new List<SnapElement>(old);
+            var snapshot = new List<Func<SnapElement>>(items.Count);
+            var inserted = new List<BatchValue>();
+            foreach (var item in items)
+            {
+                var i = unmatched.FindIndex(e => ValueEquals(item, e.Value));
+                if (i >= 0)
+                {
+                    var kept = unmatched[i];
+                    unmatched.RemoveAt(i);
+                    snapshot.Add(() => kept);
+                    continue;
+                }
+                var planned = Element(item, shape.Element!, old, where);
+                inserted.Add(planned.Value);
+                snapshot.Add(() => planned.Snap(item));
+            }
+            _ops.Add(new KeyedPatchOp(coll, keySelector, [.. unmatched.Select(e => BatchValue.Of(e.Oop))], inserted));
             return () => [.. snapshot.Select(f => f())];
         }
 
@@ -988,6 +1076,22 @@ public sealed partial class GsObjectContext : IDisposable
                         slots.Add(Oop.FromSmallInteger(6));
                         slots.Add(pub.Feed);
                         slots.Add(Values(pub.Objects));
+                        break;
+                    case KeyedPatchOp kp: // the server evaluates target, removed, inserted in this order
+                        slots.Add(Oop.FromSmallInteger(7));
+                        Value(kp.Target);
+                        slots.Add(Text(kp.Selector));
+                        slots.Add(Values(kp.Removed));
+                        slots.Add(Values(kp.Inserted));
+                        break;
+                    case FillNewOp f:
+                        slots.Add(Oop.FromSmallInteger(9));
+                        Value(f.Target);
+                        slots.Add(Oop.FromSmallInteger(f.Index));
+                        slots.Add(f.Class);
+                        slots.Add(f.Selector is null ? Oop.Nil : Text(f.Selector));
+                        slots.Add(Values(f.Items));
+                        slots.Add(Text(f.Where));
                         break;
                 }
             }

@@ -106,7 +106,7 @@ internal sealed class Emitter
 
     private readonly Compilation _compilation;
     private readonly SourceProductionContext _spc;
-    private readonly INamedTypeSymbol? _gsClass, _gsInstVar, _gsIgnore, _gsOop, _gsReadOnly, _gsCollection, _gsConverter, _converter, _oop;
+    private readonly INamedTypeSymbol? _gsClass, _gsInstVar, _gsIgnore, _gsOop, _gsReadOnly, _gsCollection, _gsDictionaryKey, _gsConverter, _converter, _oop;
     private readonly List<INamedTypeSymbol> _mapped = [];
     private readonly HashSet<string> _seen = [];
     private readonly Queue<ITypeSymbol> _todo = new();
@@ -125,6 +125,7 @@ internal sealed class Emitter
         _gsOop = T("GemStone.Gci.Mapping.GsOopAttribute");
         _gsReadOnly = T("GemStone.Gci.Mapping.GsReadOnlyAttribute");
         _gsCollection = T("GemStone.Gci.Mapping.GsCollectionAttribute");
+        _gsDictionaryKey = T("GemStone.Gci.Mapping.GsDictionaryKeyAttribute");
         _gsConverter = T("GemStone.Gci.Mapping.GsConverterAttribute");
         _converter = T("GemStone.Gci.Mapping.IGsValueConverter");
         _oop = T("GemStone.Gci.Oop");
@@ -303,9 +304,11 @@ internal sealed class Emitter
                 var kind = Attribute(prop, _gsCollection)?.ConstructorArguments.FirstOrDefault().Value is int k
                     ? $"({Meta}.GsCollectionKind){k}" : "null";
                 var readOnly = Attribute(prop, _gsReadOnly) is not null ? "true" : "false";
+                var keySelector = Attribute(prop, _gsDictionaryKey)?.ConstructorArguments.FirstOrDefault().Value is string ks
+                    ? Literal(ks) : "null";
                 var instVar = (string?)iv.ConstructorArguments.FirstOrDefault().Value ?? "";
                 properties.Add($"{Meta}.GsPropertyMetadata.Create<{owner}, {valueType}>({Literal(prop.Name)}, {Literal(instVar)}, " +
-                               $"o => {Getter(prop, id, owner, valueType)}, (o, v) => {Setter(prop, id, owner, valueType)}, {kind}, {readOnly}, {converter})");
+                               $"o => {Getter(prop, id, owner, valueType)}, (o, v) => {Setter(prop, id, owner, valueType)}, {kind}, {readOnly}, {converter}, {keySelector})");
             }
         }
 

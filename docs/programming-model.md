@@ -90,6 +90,42 @@ What happens:
   `GciSession` (`Abort`, `Commit`, `Begin`, their `Async` versions, `RunInTransaction`), not
   `System abortTransaction` in Smalltalk code.
 
+## Server collections, C# lists
+
+The Smalltalk model chooses its collections for the database: `RcIdentityBag` for associations
+that several sessions add to, `RcKeyValueDictionary` for lookups by name, `RcQueue` for work
+handed between processes, `Set`, `Array` … The C# side can map every one of them as a plain
+`List<T>`; `[GsCollection]` is only needed to have the class checked.
+
+```csharp
+[GsClass("Region")]
+public class Region
+{
+    [GsInstVar("towns")] public List<Town> Towns { get; set; } = [];                               // RcIdentityBag
+    [GsInstVar("townsByName"), GsDictionaryKey("name")] public List<Town> TownsByName { get; set; } = []; // RcKeyValueDictionary
+    [GsInstVar("jobs")] public List<Job> Jobs { get; set; } = [];                                 // RcQueue
+}
+```
+
+- **Loading:** lists get the elements, a dictionary its values. Unordered collections (sets,
+  bags, RC collections, dictionaries) come in no particular order, possibly a different one on
+  each load; where the order matters, the Smalltalk model uses an `Array` or an
+  `OrderedCollection`. Loading an `RcQueue` does not take anything out of it.
+- **Changing:** `SaveChanges` patches the server collection in place, with the operations that
+  fit its class: `remove:`/`add:` for sets, bags and RC collections, positions for ordered ones.
+- **Dictionaries** need `[GsDictionaryKey("selector")]` to be changed: the server puts a new
+  value under `value perform: selector` and removes the key of a removed one. The key is part of
+  the model (an attribute of the value). Without the attribute such a list can be loaded, and
+  `SaveChanges` refuses to change it.
+- **Queues** can only be appended to from C#. A worker that takes jobs out does that in
+  Smalltalk (`session.Execute("Jobs remove")` or a method of the model).
+- **New objects get the collections of their class's `initialize`**: in GemStone 3.7, `new`
+  sends `initialize`, so `initialize` (written or generated on the Smalltalk side) decides that
+  `towns` is an `RcIdentityBag`; `SaveChanges` fills that collection. Only if `initialize`
+  leaves the variable nil does the C# side create one (an `OrderedCollection`, a
+  `KeyValueDictionary` with `[GsDictionaryKey]`, or what `[GsCollection]` names). `initialize`
+  should create empty collections: `SaveChanges` adds the list's elements to what is there.
+
 ## Loading the same object twice
 
 A context has an identity map: each GemStone object becomes exactly one C# object (one per

@@ -26,6 +26,23 @@ public sealed class GsInstVarAttribute(string name) : Attribute
     public string Name { get; } = name;
 }
 
+/// <summary>
+/// A list property whose GemStone collection is a dictionary keyed by an attribute of its values
+/// (for example name → object). Loading yields the values; when the list changes,
+/// <see cref="GsObjectContext.SaveChanges"/> puts new values under <c>value perform: selector</c>
+/// (computed on the server) and removes the keys of removed values.
+/// </summary>
+/// <remarks>
+/// Without this attribute such a list can be loaded but not changed. For a new object, the
+/// dictionary is the one the GemStone class's <c>initialize</c> created (or a KeyValueDictionary).
+/// </remarks>
+[AttributeUsage(AttributeTargets.Property, Inherited = true)]
+public sealed class GsDictionaryKeyAttribute(string selector) : Attribute
+{
+    /// <summary>Unary selector the server sends to a value to get its key, e.g. <c>"name"</c>.</summary>
+    public string Selector { get; } = selector;
+}
+
 /// <summary>Excludes a property from mapping (reserved for future naming conventions).</summary>
 [AttributeUsage(AttributeTargets.Property, Inherited = true)]
 public sealed class GsIgnoreAttribute : Attribute;

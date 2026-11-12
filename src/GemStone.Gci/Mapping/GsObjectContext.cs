@@ -584,6 +584,7 @@ public sealed partial class GsObjectContext
         private readonly GciSession _session = ctx._session;
         private readonly Dictionary<Oop, GciObjectReport> _reports = [];
         private readonly Dictionary<Oop, Oop[]> _flattened = [];
+        private readonly Dictionary<Oop, Oop[]> _dictionaryValues = [];
 
         /// <summary>Values the traversal cannot decode (LargeInteger, ScaledDecimal, date/time …), converted in one batch.</summary>
         private readonly HashSet<Oop> _toConvert = [];
@@ -732,13 +733,19 @@ public sealed partial class GsObjectContext
                 throw GsMappingException.For($"{where}: declared as {d}, but {oop} is a {ctx.ClassName(report.Class)}.");
             if (kind == CollectionClass.None)
                 throw GsMappingException.For($"{where}: {oop} is a {ctx.ClassName(report.Class)}, not a collection.");
-            if ((shape.Kind == GsShapeKind.Dictionary) != (kind == CollectionClass.Dictionary))
-                throw GsMappingException.For(shape.Kind == GsShapeKind.Dictionary
-                    ? $"{where}: {shape.Type.Name} needs a dictionary, but {oop} is a {ctx.ClassName(report.Class)}."
-                    : $"{where}: {oop} is a {ctx.ClassName(report.Class)} (a dictionary); use a Dictionary<K,V> property.");
+            if (shape.Kind == GsShapeKind.Dictionary && kind != CollectionClass.Dictionary)
+                throw GsMappingException.For($"{where}: {shape.Type.Name} needs a dictionary, but {oop} is a {ctx.ClassName(report.Class)}.");
             if (kind is CollectionClass.Sequence or CollectionClass.Nsc)
                 return [.. report.Indexed];
-            return _flattened.TryGetValue(oop, out var flat) ? flat : null;
+            if (!_flattened.TryGetValue(oop, out var flat)) return null;
+            if (shape.Kind != GsShapeKind.Dictionary && kind == CollectionClass.Dictionary)
+            {
+                // A dictionary loaded as a list: its values (key/value pairs from Flatten).
+                if (!_dictionaryValues.TryGetValue(oop, out var values))
+                    _dictionaryValues[oop] = values = [.. flat.Where((_, i) => i % 2 == 1)];
+                return values;
+            }
+            return flat;
         }
 
         // ---- Phase 2: build the C# objects ----
@@ -790,7 +797,10 @@ public sealed partial class GsObjectContext
                 {
                     var elements = new List<SnapElement>();
                     value = Collection(ivOop, p.Shape, p.Path, p.CollectionKind, elements);
-                    coll = new CollectionSnapshot(ivOop, elements);
+                    coll = new CollectionSnapshot(ivOop, elements)
+                    {
+                        KeyedValues = p.Shape.Kind != GsShapeKind.Dictionary && ctx.Classify(_reports[ivOop].Class) == CollectionClass.Dictionary,
+                    };
                     _toRetain.Add(ivOop);
                 }
                 else

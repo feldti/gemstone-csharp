@@ -76,7 +76,8 @@ internal sealed class ReflectionMappingProvider : IGsMappingProvider
 
             properties.Add(new GsPropertyMetadata(p.DeclaringType!.Name, p.Name, p.PropertyType, iv.Name,
                 p.GetValue, p.SetValue, p.GetCustomAttribute<GsCollectionAttribute>()?.Kind,
-                p.GetCustomAttribute<GsReadOnlyAttribute>() is not null, converter));
+                p.GetCustomAttribute<GsReadOnlyAttribute>() is not null, converter,
+                p.GetCustomAttribute<GsDictionaryKeyAttribute>()?.Selector));
         }
 
         // C# subclasses mapped to GemStone subclasses (polymorphic loading), most derived first.
