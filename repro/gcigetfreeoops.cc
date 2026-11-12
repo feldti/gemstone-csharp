@@ -3,8 +3,10 @@
  *   1. Windows client only: GciGetFreeOops(n) with n > 2000 and n not a multiple of 2000 fails
  *      with error 2166 (lgcUncompress ... destSize < uncomprSize 16000); the session is broken
  *      afterwards.
- *   2. All clients: at most 100,000 OOPs per call; the rest of the result array stays 0 and
- *      GciErr reports nothing.
+ *   2. All clients, documentation: at most 100,000 OOPs per call. The rest of the result array
+ *      is left untouched, GciErr reports nothing, and count is not returned (the manual says it
+ *      is). For comparison, GciGetFreeOopsEncoded stops at 20,000 per call but reports the
+ *      number it allocated.
  *
  * Build on Linux x86-64 (as in the GemBuilder for C manual, "Linking a GCI application"; the
  * GemStone headers are C++, so compile with g++; with the 3.6.x headers and glibc 2.38 or later
@@ -51,24 +53,54 @@ static int compareOops(const void *a, const void *b)
   return x < y ? -1 : x > y;
 }
 
-/* One GciGetFreeOops call: how many entries are 0, how many distinct OOPs came back. */
+/* One GciGetFreeOops call. The array is filled with a marker first, to show which entries the
+   call leaves untouched. (A caller who wants to detect them can memset the array to 0 instead.) */
+#define MARKER ((OopType)0xABABABABABABABABULL)
 static int getFreeOops(int count)
 {
-  int zeros = 0, distinct = 0, i, ok;
+  int untouched = 0, distinct = 0, i, ok;
 
-  memset(buffer, 0, sizeof(OopType) * (size_t)count);
+  for (i = 0; i < count; i++) buffer[i] = MARKER;
   GciGetFreeOops(count, buffer);
   ok = report("GciGetFreeOops");
   qsort(buffer, (size_t)count, sizeof(OopType), compareOops);
   for (i = 0; i < count; i++) {
-    if (buffer[i] == 0) zeros++;
+    if (buffer[i] == MARKER) untouched++;
     else if (i == 0 || buffer[i] != buffer[i - 1]) distinct++;
   }
-  printf("GciGetFreeOops(%6d): %s, %6d distinct OOPs, %6d entries 0%s\n", count,
-         ok ? "no error" : "ERROR   ", distinct, zeros,
-         ok && zeros == 0 && distinct == count ? "" : "   <-- not as expected");
+  printf("GciGetFreeOops(%6d): %s, %6d distinct OOPs, %6d entries untouched%s\n", count,
+         ok ? "no error" : "ERROR   ", distinct, untouched,
+         ok && untouched == 0 && distinct == count ? "" : "   <-- not as expected");
   fflush(stdout);
   return ok;
+}
+
+/* For comparison: GciGetFreeOopsEncoded also stops at a limit (20,000 per call), but reports it:
+   count comes back as the number of encoded entries, GciFetchNumEncodedOops gives the OOPs. */
+static void getFreeOopsEncoded(int count)
+{
+  int n = count, oops = 0, decoded = 0, zeros = 0, distinct = 0, ok, i;
+  OopType *decodedOops = (OopType *)calloc((size_t)count, sizeof(OopType));
+
+  memset(buffer, 0, sizeof(OopType) * (size_t)count);
+  GciGetFreeOopsEncoded(&n, buffer);
+  ok = report("GciGetFreeOopsEncoded");
+  if (ok && n > 0) {
+    oops = GciFetchNumEncodedOops(buffer, n);
+    decoded = GciDecodeOopArray(buffer, n, decodedOops, count);
+  }
+  if (decoded > 0) {
+    qsort(decodedOops, (size_t)decoded, sizeof(OopType), compareOops);
+    for (i = 0; i < decoded; i++) {
+      if (decodedOops[i] == 0) zeros++;
+      else if (i == 0 || decodedOops[i] != decodedOops[i - 1]) distinct++;
+    }
+  }
+  printf("GciGetFreeOopsEncoded(%6d): %s, count out %4d, GciFetchNumEncodedOops %6d, "
+         "%6d distinct OOPs, %d entries 0\n", count, ok ? "no error" : "ERROR   ", n, oops,
+         distinct, zeros);
+  fflush(stdout);
+  free(decodedOops);
 }
 
 /* Is the session still usable? */
@@ -105,9 +137,15 @@ int main(int argc, char **argv)
     return 1;
   }
   printf("logged in, client %s\n", GciVersion());
-  printf("\nIssue 2: at most 100,000 OOPs per call (expected: all OOPs, or an error)\n");
+  printf("\nIssue 2: at most 100,000 OOPs per call, the rest is left untouched, no error\n");
   for (i = 0; i < sizeof counts / sizeof counts[0]; i++)
     getFreeOops(counts[i]);
+  probe();
+
+  /* For comparison: the encoded variant reports how many OOPs it allocated. */
+  printf("\nFor comparison: GciGetFreeOopsEncoded reports a partial allocation\n");
+  getFreeOopsEncoded(10000);
+  getFreeOopsEncoded(150000);
   probe();
 
   /* Issue 1: a count above 2000 that is not a multiple of 2000. Fails on the Windows client
